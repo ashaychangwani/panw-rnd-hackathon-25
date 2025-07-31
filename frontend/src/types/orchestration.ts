@@ -1,0 +1,252 @@
+/**
+ * Edge node connection status
+ */
+export type NodeStatus = 'online' | 'offline' | 'busy' | 'error' | 'unknown'
+
+/**
+ * Edge node capabilities
+ */
+export type NodeCapability = 
+  | 'windows-analysis'
+  | 'linux-analysis'
+  | 'macos-analysis'
+  | 'network-scanning'
+  | 'malware-analysis'
+  | 'memory-forensics'
+  | 'log-analysis'
+  | 'registry-analysis'
+  | 'file-analysis'
+
+/**
+ * Analysis workflow step status
+ */
+export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'waiting'
+
+/**
+ * Threat analysis status
+ */
+export type AnalysisStatus = 'monitoring' | 'detected' | 'analyzing' | 'scanning' | 'correlating' | 'completed' | 'failed'
+
+/**
+ * Threat categories for intelligence classification
+ */
+export type ThreatCategory = 
+  | 'malware'
+  | 'ransomware'
+  | 'apt'
+  | 'vulnerability'
+  | 'phishing'
+  | 'general'
+
+/**
+ * Edge node resource utilization
+ */
+export interface NodeResources {
+  cpu: number // percentage 0-100
+  memory: number // percentage 0-100
+  network: number // percentage 0-100
+  disk: number // percentage 0-100
+}
+
+/**
+ * Geographic location data
+ */
+export interface NodeLocation {
+  country: string
+  city?: string
+  latitude?: number
+  longitude?: number
+}
+
+/**
+ * Edge node data model
+ */
+export interface EdgeNode {
+  id: string
+  hostname: string
+  ipAddress: string
+  status: NodeStatus
+  capabilities: NodeCapability[]
+  osType: 'windows' | 'linux' | 'macos'
+  osVersion: string
+  location?: NodeLocation
+  resources: NodeResources
+  lastPing: Date
+  connectedAt: Date
+  currentTasks: string[] // execution node IDs
+  isDemo?: boolean
+}
+
+/**
+ * Analysis workflow step (DiGraph node)
+ */
+export interface WorkflowStep {
+  id: string
+  name: string
+  description: string
+  type: 'blog-detection' | 'ioc-extraction' | 'fleet-deployment' | 'node-scanning' | 'evidence-correlation' | 'mitigation'
+  status: WorkflowStepStatus
+  progress: number
+  allNodes: boolean // true if this step affects all nodes
+  affectedNodes: string[] // specific edge node IDs if not all
+  estimatedDuration: number // seconds
+  startedAt?: Date
+  completedAt?: Date
+  results?: Record<string, unknown>
+  error?: string
+}
+
+/**
+ * Workflow connection (DiGraph edge)
+ */
+export interface WorkflowConnection {
+  id: string
+  source: string // workflow step ID
+  target: string // workflow step ID
+  type: 'sequential' | 'parallel' | 'conditional'
+}
+
+/**
+ * Automated threat analysis session
+ */
+export interface ThreatAnalysis {
+  id: string
+  threatTitle: string
+  sourceUrl: string
+  sourceName: string
+  status: AnalysisStatus
+  detectedAt: Date
+  startedAt?: Date
+  completedAt?: Date
+  priority: 'low' | 'medium' | 'high' | 'critical'
+  threatCategories: ThreatCategory[]
+  
+  // Extracted threat intelligence
+  extractedIoCs: {
+    ips: string[]
+    domains: string[]
+    hashes: string[]
+    patterns: string[]
+  }
+  
+  // Analysis workflow
+  workflow: {
+    steps: WorkflowStep[]
+    connections: WorkflowConnection[]
+  }
+  
+  // Results from all nodes
+  nodeResults: {
+    [nodeId: string]: {
+      status: 'scanning' | 'completed' | 'failed' | 'clean' | 'compromised'
+      evidence: Record<string, unknown>[]
+      lastUpdated: Date
+    }
+  }
+  
+  // Overall findings
+  overallThreatLevel: 'none' | 'low' | 'medium' | 'high' | 'critical'
+  compromisedNodes: string[]
+  mitigationActions: string[]
+  isDemo?: boolean
+}
+
+/**
+ * Intelligence source (simplified blog concept)
+ */
+export interface IntelligenceSource {
+  id: string
+  url: string
+  title: string
+  description: string
+  type: 'blog' | 'feed' | 'api'
+  lastChecked?: Date
+  isActive: boolean
+  threatCategories: ThreatCategory[]
+  isDemo?: boolean
+}
+
+/**
+ * Campaign execution status
+ */
+export type CampaignStatus = 'planning' | 'deploying' | 'running' | 'completed' | 'failed' | 'paused' | 'cancelled'
+
+/**
+ * Execution node for campaign orchestration
+ */
+export interface ExecutionNode {
+  id: string
+  name: string
+  description: string
+  type: 'discovery' | 'analysis' | 'correlation' | 'mitigation'
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  progress: number
+  assignedNodes: string[] // edge node IDs
+  dependencies: string[] // other execution node IDs
+  estimatedDuration: number // seconds
+  startedAt?: Date
+  completedAt?: Date
+  results?: Record<string, unknown>
+  error?: string
+}
+
+/**
+ * Execution plan edge
+ */
+export interface ExecutionEdge {
+  id: string
+  source: string // execution node ID
+  target: string // execution node ID
+  type: 'dependency' | 'sequential' | 'parallel'
+}
+
+/**
+ * Threat campaign orchestration
+ */
+export interface ThreatCampaign {
+  id: string
+  name: string
+  description: string
+  status: CampaignStatus
+  triggerSource: 'manual' | 'intelligence' | 'alert'
+  triggerData: Record<string, unknown>
+  
+  // Execution plan (DiGraph)
+  executionPlan: {
+    nodes: ExecutionNode[]
+    edges: ExecutionEdge[]
+  }
+  
+  targetNodes: string[] // edge node IDs
+  createdAt: Date
+  createdBy: string
+  startedAt?: Date
+  completedAt?: Date
+  priority: 'low' | 'medium' | 'high' | 'critical'
+  threatCategories: ThreatCategory[]
+  
+  // Results
+  overallStatus?: 'clean' | 'compromised' | 'inconclusive'
+  compromisedNodes?: string[]
+  evidence?: Record<string, unknown>[]
+  mitigationActions?: string[]
+  findings?: Record<string, unknown>[]
+  isDemo?: boolean
+}
+
+/**
+ * System metrics and health
+ */
+export interface SystemMetrics {
+  totalNodes: number
+  onlineNodes: number
+  activeSources: number
+  activeAnalyses: number
+  completedAnalyses: number
+  threatsDetectedToday: number
+  compromisedNodes: number
+  averageResponseTime: number // seconds
+  activeCampaigns: number
+  completedCampaigns: number
+  lastThreatDetected?: Date
+}
