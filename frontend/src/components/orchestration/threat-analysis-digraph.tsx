@@ -98,7 +98,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
       generatedNodes.push({
         id: step.id,
         type: 'status',
-        label: step.label,
+        label: step.longLabel,
         status: nodeStatus as DiGraphNode['status'],
         x: 100 + index * 200,
         y: currentY,
@@ -127,14 +127,20 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
       const offset = -((visibleImplSteps.length - 1) / 2) * childSpacing + index * childSpacing
       const xPos = step3X + offset
 
-      // Derive node status
+      // Derive node status from step data
       let stepStatus: DiGraphNode['status'] = 'pending'
-      if (analysis.status === 'completed' || step.status === 'completed') {
+      if (analysis.status === 'completed') {
+        // If overall analysis is completed, all steps should be completed
+        stepStatus = 'completed'
+      } else if (step.status === 'completed') {
         stepStatus = 'completed'
       } else if (step.status === 'running') {
         stepStatus = 'running'
       } else if (step.status === 'failed') {
         stepStatus = 'failed'
+      } else if (step.status && step.status !== 'pending') {
+        // Any other non-pending status should show as running
+        stepStatus = 'running'
       }
 
       generatedNodes.push({
@@ -156,16 +162,24 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
       const parentId = step.step_id ?? step.id ?? `step-${index}`
       const assignedNodes: string[] = step.assigned_nodes ?? step.assignedNodes ?? []
       assignedNodes.forEach((nodeId: string, nodeIndex: number) => {
-        // Find the matching job status in nodeResults, if available
-        const nodeResults = (analysis as any).nodeResults ?? (analysis as any).node_results ?? {}
+        // Find the matching job status in step.result, if available
         let nodeJobStatus: string | undefined
-        if (nodeResults[nodeId]) {
-          const entry = (nodeResults[nodeId] as any[]).find(r => r.step_id === step.step_id || r.step_id === step.id)
-          nodeJobStatus = entry?.result?.status ?? entry?.status
+        let evidenceCount = 0
+        
+        // Check step.result for this nodeId
+        if (step.result && step.result[nodeId]) {
+          const nodeResult = step.result[nodeId]
+          // Check multiple possible locations for status
+          nodeJobStatus = nodeResult.status ?? nodeResult.result?.status
+          // Get evidence count
+          evidenceCount = nodeResult.evidence?.length ?? 0
         }
 
         let nodeStatus: DiGraphNode['status'] = 'pending'
-        if (analysis.status === 'completed' || nodeJobStatus === 'completed') {
+        if (analysis.status === 'completed') {
+          // If overall analysis is completed, all nodes should be completed
+          nodeStatus = 'completed'
+        } else if (nodeJobStatus === 'completed') {
           nodeStatus = 'completed'
         } else if (nodeJobStatus === 'running' || nodeJobStatus === 'scanning') {
           nodeStatus = 'running'
@@ -185,15 +199,18 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
             nodeId,
             status: nodeStatus,
             analysisType: step.name,
-            evidenceCount: 0
+            evidenceCount: evidenceCount,
+            lastUpdated: new Date(),
+            findings: []
           }
         })
       })
     })
 
     // --- Adjust status of the step3 ("IoC Scan") node based on child step completion ---
+    // Only override step 3 status if there are visible implementation steps
     const step3Node = generatedNodes.find(n => n.id === 'step3')
-    if (step3Node) {
+    if (step3Node && visibleImplSteps.length > 0) {
       const childImplStatuses = visibleImplSteps.map(s => s.status)
       if (analysis.status === 'completed' || childImplStatuses.every(s => s === 'completed')) {
         step3Node.status = 'completed'
@@ -201,9 +218,11 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
         step3Node.status = 'running'
       } else if (childImplStatuses.some(s => s === 'failed')) {
         step3Node.status = 'failed'
-      } else {
+      } else if (childImplStatuses.length > 0) {
+        // Only set to pending if we have children but they haven't started yet
         step3Node.status = 'pending'
       }
+      // If no children are visible yet, keep the original status from the main flow
     }
 
     setNodes(generatedNodes) // Update nodes state
@@ -260,7 +279,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
         <div className="flex items-center gap-2">
           <h3 className="font-semibold text-gray-900">Threat Analysis Flow</h3>
           <span className="text-sm text-gray-500">
-            {nodes.filter(n => n.status === 'completed').length} / {nodes.length} nodes active
+            {nodes.filter(n => n.status === 'completed').length} / {nodes.length} nodes done
           </span>
         </div>
         
@@ -337,7 +356,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
           {/* Connection lines from step 3 to implementation steps (A, B, C) */}
           {(() => {
             const step3Node = nodes.find(n => n.id === 'step3')
-            const implementationNodes = nodes.filter(n => n.type === 'ioc' && ['stepA', 'stepB', 'stepC'].includes(n.id))
+            const implementationNodes = nodes.filter(n => n.type === 'ioc' && n.parentId === 'step3')
             
             if (!step3Node) return null
             
@@ -356,7 +375,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
           })()}
 
           {/* Dotted connection lines from implementation steps (A, B, C) to their edge nodes */}
-          {nodes.filter(n => n.type === 'ioc' && ['stepA', 'stepB', 'stepC'].includes(n.id)).map(implNode => {
+          {nodes.filter(n => n.type === 'ioc' && n.parentId === 'step3').map(implNode => {
             const childNodes = nodes.filter(n => n.parentId === implNode.id)
             return childNodes.map(childNode => (
               <line

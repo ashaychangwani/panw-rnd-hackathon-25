@@ -6,19 +6,21 @@ import logging
 
 from app.models.job import NodeInfo
 from app.services.job_manager import JobManager
+from app.services.system_monitor import SystemMonitor
 from app.api import tasks
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global job manager instance
+# Global instances
 job_manager: JobManager = None
+system_monitor: SystemMonitor = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    global job_manager
+    global job_manager, system_monitor
     
     # Get node configuration from environment
     node_info = {
@@ -38,8 +40,9 @@ async def lifespan(app: FastAPI):
         "status": "online"
     }
     
-    # Initialize job manager
+    # Initialize services
     job_manager = JobManager(node_info)
+    system_monitor = SystemMonitor()
     tasks.set_job_manager(job_manager)
     
     logger.info(f"Edge node {node_info['node_id']} started successfully")
@@ -91,6 +94,21 @@ async def health_check():
         ],
         "status": "online"
     }
+    
+    # Get real-time resource utilization
+    if system_monitor:
+        try:
+            resources = await system_monitor.get_all_resources()
+            node_info["resources"] = resources
+        except Exception as e:
+            logger.error(f"Error getting resource utilization: {e}")
+            # Fallback to default values if monitoring fails
+            node_info["resources"] = {
+                "cpu": 0.0,
+                "memory": 0.0,
+                "network": 0.0,
+                "disk": 0.0
+            }
     
     # Get current job statistics
     active_jobs = {}

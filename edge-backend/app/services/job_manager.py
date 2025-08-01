@@ -6,6 +6,7 @@ from datetime import datetime
 
 from app.models.job import Job, JobStatus, TaskRequest
 from app.services.simulation_service import SimulationService
+from app.services.system_monitor import SystemMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ class JobManager:
         self.node_info = node_info
         self.jobs: Dict[str, Job] = {}
         self.simulation_service = SimulationService(node_info)
+        self.system_monitor = SystemMonitor()
         self.active_tasks: Dict[str, asyncio.Task] = {}
     
     async def submit_job(self, task_request: TaskRequest) -> str:
@@ -95,7 +97,7 @@ class JobManager:
             del self.jobs[job_id]
             logger.info(f"Cleaned up old job {job_id}")
     
-    def get_node_info(self) -> Dict:
+    async def get_node_info(self) -> Dict:
         """Get current node information and statistics"""
         active_jobs = self.get_active_jobs()
         completed_jobs = {
@@ -107,8 +109,22 @@ class JobManager:
             if job.status == JobStatus.FAILED
         }
         
+        # Get real-time resource utilization
+        node_info_with_resources = self.node_info.copy()
+        try:
+            resources = await self.system_monitor.get_all_resources()
+            node_info_with_resources["resources"] = resources
+        except Exception as e:
+            logger.error(f"Error getting resource utilization in get_node_info: {e}")
+            node_info_with_resources["resources"] = {
+                "cpu": 0.0,
+                "memory": 0.0,
+                "network": 0.0,
+                "disk": 0.0
+            }
+        
         return {
-            "node_info": self.node_info,
+            "node_info": node_info_with_resources,
             "job_statistics": {
                 "total_jobs": len(self.jobs),
                 "active_jobs": len(active_jobs),

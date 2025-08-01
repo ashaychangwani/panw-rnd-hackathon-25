@@ -35,6 +35,9 @@ dependencies = [
     
     # Web scraping and parsing
     "beautifulsoup4==4.12.2",
+    
+    # System monitoring
+    "psutil>=5.9.0",
 ]
 
 [build-system]

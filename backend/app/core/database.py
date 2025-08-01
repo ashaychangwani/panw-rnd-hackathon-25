@@ -28,7 +28,6 @@ class ThreatAnalysis:
     blog_content: Optional[str] = None
     implementation_plan: Optional[Dict[str, Any]] = None
     workflow_steps: Optional[list] = None
-    node_results: Optional[Dict[str, Any]] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None

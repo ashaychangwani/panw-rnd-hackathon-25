@@ -258,11 +258,16 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
             country: backendNode.location.country,
             city: backendNode.location.city
           } : undefined,
-          resources: {
-            cpu: Math.floor(Math.random() * 50),  // Simulated for now
-            memory: Math.floor(Math.random() * 50),
-            network: Math.floor(Math.random() * 30),
-            disk: Math.floor(Math.random() * 80)
+          resources: backendNode.resources ? {
+            cpu: backendNode.resources.cpu,
+            memory: backendNode.resources.memory,
+            network: backendNode.resources.network,
+            disk: backendNode.resources.disk
+          } : {
+            cpu: 0,
+            memory: 0,
+            network: 0,
+            disk: 0
           },
           lastPing: new Date(),
           connectedAt: new Date(),
@@ -336,7 +341,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
           ],
           connections: []
         },
-        nodeResults: {},
+
         overallThreatLevel: 'none',
         compromisedNodes: [],
         mitigationActions: [],
@@ -380,7 +385,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
         threatCategories: ['general'] as ThreatCategory[],
         extractedIoCs: { ips: [], domains: [], hashes: [], patterns: [] },
         workflow: { steps: [], connections: [] },
-        nodeResults: {},
+
         overallThreatLevel: 'none',
         compromisedNodes: [],
         mitigationActions: [],
@@ -587,7 +592,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
                             patterns: analysisData.implementation_plan.iocs_and_ttps.filter((item: any) => item.type === 'TTP').map((item: any) => item.indicator)
                           }
                         : analysis.extractedIoCs,
-                      nodeResults: analysisData.node_results || analysis.nodeResults,
+
                       completedAt: analysisData.status === 'completed' ? new Date() : analysis.completedAt
                     }
                   : analysis

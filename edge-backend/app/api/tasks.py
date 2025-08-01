@@ -128,7 +128,7 @@ async def get_node_info():
         if not job_manager:
             raise HTTPException(status_code=500, detail="Job manager not initialized")
         
-        return job_manager.get_node_info()
+        return await job_manager.get_node_info()
     except Exception as e:
         logger.error(f"Error getting node info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

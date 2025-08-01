@@ -254,6 +254,7 @@ class OrchestrationService:
             
             all_completed = True
             any_progress = False
+            step_updated = False
             
             for step in workflow_steps:
                 if step.status == "running" and step.job_ids:
@@ -263,16 +264,36 @@ class OrchestrationService:
                     completed_jobs = 0
                     total_progress = 0
                     
+                    # Initialize step.result if it doesn't exist
+                    if not step.result:
+                        step.result = {}
+                    
                     for node_id, job_status in job_statuses.items():
                         if job_status:
                             if job_status.status == "completed":
                                 completed_jobs += 1
                                 total_progress += 100
+                                
+                                # Collect result immediately when job completes
+                                if node_id not in step.result:
+                                    result = await self.edge_service.get_job_result(node_id, step.job_ids[node_id])
+                                    if result:
+                                        step.result[node_id] = result
+                                        step_updated = True
+                                        logger.info(f"Collected result from node {node_id} for step {step.name}")
+                                        
                             elif job_status.status == "running":
                                 total_progress += job_status.progress
                                 any_progress = True
                             elif job_status.status == "failed":
                                 logger.error(f"Job failed on node {node_id}: {job_status.error_message}")
+                                # Store failure information in result
+                                step.result[node_id] = {
+                                    "status": "failed",
+                                    "error_message": job_status.error_message,
+                                    "evidence": []
+                                }
+                                step_updated = True
                     
                     # Calculate overall step progress
                     if job_statuses:
@@ -283,15 +304,42 @@ class OrchestrationService:
                         step.status = "completed"
                         step.progress = 100
                         logger.info(f"Step {step.name} completed")
+                        step_updated = True
                     else:
                         all_completed = False
                 
-                elif step.status in ["pending", "running"]:
+                elif step.status == "pending":
+                    # Check if dependencies are satisfied for pending steps
+                    if step.dependencies:
+                        dependencies_completed = True
+                        for dep_id in step.dependencies:
+                            dep_step = next((s for s in workflow_steps if s.step_id == dep_id), None)
+                            if not dep_step or dep_step.status != "completed":
+                                dependencies_completed = False
+                                break
+                        
+                        if dependencies_completed:
+                            # All dependencies completed, transition to running
+                            if step.task_type == "evidence_correlation":
+                                # For correlation steps, mark as running and they'll be processed in _correlate_results
+                                step.status = "running"
+                                step.progress = 0
+                                logger.info(f"Dependencies satisfied for {step.name}, transitioning to running")
+                                step_updated = True
+                            else:
+                                # For other step types, they should have been distributed already
+                                logger.warning(f"Pending step {step.name} has satisfied dependencies but wasn't distributed")
+                    
+                    all_completed = False
+                
+                elif step.status == "running":
+                    # Handle running steps without job_ids (like correlation steps)
                     all_completed = False
             
-            # Update storage with progress
-            workflow_steps_dict = [step.dict() for step in workflow_steps]
-            self.storage.update_analysis(analysis_id, workflow_steps=workflow_steps_dict)
+            # Update storage with progress and results
+            if step_updated or any_progress:
+                workflow_steps_dict = [step.dict() for step in workflow_steps]
+                self.storage.update_analysis(analysis_id, workflow_steps=workflow_steps_dict)
             
             if all_completed:
                 break
@@ -308,8 +356,8 @@ class OrchestrationService:
         analysis = self.storage.get_analysis(analysis_id)
         workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps or []]
         
-        node_results = {}
         correlation_step = None
+        total_evidence_count = 0
         
         # Find the correlation step
         for step in workflow_steps:
@@ -317,28 +365,14 @@ class OrchestrationService:
                 correlation_step = step
                 break
         
-        # Collect results from all completed jobs
+        # Count evidence across all completed steps (results are already in step.result)
         for step in workflow_steps:
-            if step.status == "completed" and step.job_ids:
-                for node_id, job_id in step.job_ids.items():
-                    result = await self.edge_service.get_job_result(node_id, job_id)
-                    if result:
-                        if node_id not in node_results:
-                            node_results[node_id] = []
-                        
-                        step_result_data = {
-                            "step_id": step.step_id,
-                            "step_name": step.name,
-                            "result": result
-                        }
-                        node_results[node_id].append(step_result_data)
-                        
-                        # Also populate the step.result field to link the data properly
-                        if not step.result:
-                            step.result = {}
-                        if node_id not in step.result:
-                            step.result[node_id] = []
-                        step.result[node_id].append(result)
+            if step.status == "completed" and step.result:
+                for node_id, result in step.result.items():
+                    if isinstance(result, dict) and "evidence" in result:
+                        evidence_list = result["evidence"]
+                        if isinstance(evidence_list, list):
+                            total_evidence_count += len(evidence_list)
         
         # Mark correlation step as completed
         if correlation_step:
@@ -346,16 +380,15 @@ class OrchestrationService:
             correlation_step.progress = 100
             logger.info(f"Evidence correlation completed for analysis {analysis_id}")
         
-        # Update workflow steps with linked results
+        # Update workflow steps (results are already stored in step.result)
         workflow_steps_dict = [step.dict() for step in workflow_steps]
         
-        # Store aggregated results and updated workflow steps
+        # Store updated workflow steps (no need for separate node_results)
         self.storage.update_analysis(
-            analysis_id, 
-            node_results=node_results,
+            analysis_id,
             workflow_steps=workflow_steps_dict
         )
-        logger.info(f"Correlated results from {len(node_results)} nodes for analysis {analysis_id}")
+        logger.info(f"Correlated results with {total_evidence_count} total evidence items for analysis {analysis_id}")
     
     async def _update_analysis_status(self, analysis_id: str, status: AnalysisStatus):
         """Update analysis status in storage"""
@@ -409,7 +442,7 @@ class OrchestrationService:
             "progress": overall_progress,
             "steps": analysis.workflow_steps or [],
             "implementation_plan": analysis.implementation_plan,
-            "node_results": analysis.node_results or {},
+
             "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
             "error_message": analysis.error_message
         }
@@ -451,50 +484,57 @@ class OrchestrationService:
             except Exception:
                 overall_progress = 0
         
-        # Aggregate evidence across all nodes (using both node_results and step.result for completeness)
+        # Aggregate evidence across all nodes using step.result data
         all_evidence = []
         threat_indicators = {}
         affected_nodes = set()
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
         
-        # Primary evidence aggregation from node_results
-        node_results = analysis.node_results or {}
-        for node_id, node_data in node_results.items():
-            if isinstance(node_data, list):
-                for step_result in node_data:
-                    step_evidence = step_result.get("result", {}).get("evidence", [])
-                    for evidence in step_evidence:
-                        # Enrich evidence with step context
-                        enriched_evidence = {
-                            **evidence,
-                            "step_name": step_result.get("step_name", "Unknown"),
-                            "node_hostname": step_result.get("result", {}).get("hostname", node_id)
-                        }
-                        all_evidence.append(enriched_evidence)
-                        
-                        # Track threat indicators
-                        indicator = evidence.get("indicator", "Unknown")
-                        if indicator not in threat_indicators:
-                            threat_indicators[indicator] = {
-                                "total_occurrences": 0,
-                                "affected_nodes": set(),
-                                "highest_severity": "low",
-                                "evidence_types": set()
-                            }
-                        
-                        threat_indicators[indicator]["total_occurrences"] += 1
-                        threat_indicators[indicator]["affected_nodes"].add(node_id)
-                        threat_indicators[indicator]["evidence_types"].add(evidence.get("type", "unknown"))
-                        
-                        # Update highest severity
-                        severity = evidence.get("severity", "low")
-                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
-                        affected_nodes.add(node_id)
-                        
-                        current_severity = threat_indicators[indicator]["highest_severity"]
-                        severity_levels = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-                        if severity_levels.get(severity, 1) > severity_levels.get(current_severity, 1):
-                            threat_indicators[indicator]["highest_severity"] = severity
+        # Aggregate evidence from step.result in each workflow step
+        if analysis.workflow_steps:
+            try:
+                steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
+                for step in steps:
+                    if step.result:
+                        for node_id, result in step.result.items():
+                            if isinstance(result, dict) and "evidence" in result:
+                                step_evidence = result.get("evidence", [])
+                                for evidence in step_evidence:
+                                    # Enrich evidence with step context
+                                    enriched_evidence = {
+                                        **evidence,
+                                        "step_name": step.name,
+                                        "step_id": step.step_id,
+                                        "node_id": node_id,
+                                        "node_hostname": result.get("hostname", node_id)
+                                    }
+                                    all_evidence.append(enriched_evidence)
+                                    
+                                    # Track threat indicators
+                                    indicator = evidence.get("indicator", "Unknown")
+                                    if indicator not in threat_indicators:
+                                        threat_indicators[indicator] = {
+                                            "total_occurrences": 0,
+                                            "affected_nodes": set(),
+                                            "highest_severity": "low",
+                                            "evidence_types": set()
+                                        }
+                                    
+                                    threat_indicators[indicator]["total_occurrences"] += 1
+                                    threat_indicators[indicator]["affected_nodes"].add(node_id)
+                                    threat_indicators[indicator]["evidence_types"].add(evidence.get("type", "unknown"))
+                                    
+                                    # Update highest severity
+                                    severity = evidence.get("severity", "low")
+                                    severity_counts[severity] = severity_counts.get(severity, 0) + 1
+                                    affected_nodes.add(node_id)
+                                    
+                                    current_severity = threat_indicators[indicator]["highest_severity"]
+                                    severity_levels = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+                                    if severity_levels.get(severity, 1) > severity_levels.get(current_severity, 1):
+                                        threat_indicators[indicator]["highest_severity"] = severity
+            except Exception as e:
+                logger.error(f"Error aggregating evidence from step results: {str(e)}")
         
         # Convert sets to lists for JSON serialization
         for indicator_data in threat_indicators.values():
@@ -588,8 +628,7 @@ class OrchestrationService:
             
             # Raw data (for detailed analysis if needed)
             "raw_data": {
-                "steps": analysis.workflow_steps or [],
-                "node_results": analysis.node_results or {}
+                "steps": analysis.workflow_steps or []
             }
         }
     

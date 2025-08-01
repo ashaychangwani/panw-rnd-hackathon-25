@@ -73,7 +73,7 @@ GET /api/v1/threat-analysis/{analysis_id}/status
 - Response: { "analysis_id": "uuid", "status": "running|completed|failed", "progress": 0-100, "steps": [...] }
 
 GET /api/v1/threat-analysis/{analysis_id}/results
-- Response: { "implementation_plan": {...}, "iocs": [...], "node_results": {...} }
+- Response: { "implementation_plan": {...}, "workflow": {"steps": [{"step_id": "...", "result": {"node-01": {...}, "node-02": {...}}}]} }
 
 WebSocket /ws/threat-analysis/{analysis_id}
 - Real-time status updates and progress notifications

@@ -10,6 +10,12 @@ export interface EdgeNodeInfo {
   location: { country: string; city: string }
   capabilities: string[]
   status: string
+  resources?: {
+    cpu: number
+    memory: number
+    network: number
+    disk: number
+  }
 }
 
 // Configuration
@@ -26,13 +32,25 @@ export interface ThreatAnalysisResponse {
   message: string
 }
 
+export interface WorkflowStep {
+  step_id: string
+  name: string
+  description: string
+  task_type: string
+  assigned_nodes: string[]
+  dependencies: string[]
+  status: string
+  progress: number
+  result?: Record<string, any> // node_id -> result mapping
+  job_ids?: Record<string, string> // node_id -> job_id mapping
+}
+
 export interface AnalysisStatus {
   analysis_id: string
   status: 'started' | 'running' | 'completed' | 'failed'
   progress: number
-  steps: any[]
+  steps: WorkflowStep[]
   implementation_plan?: any
-  node_results?: any
   created_at?: string
   error_message?: string
 }

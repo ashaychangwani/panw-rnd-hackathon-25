@@ -2,6 +2,12 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+class NodeResources(BaseModel):
+    cpu: float
+    memory: float
+    network: float
+    disk: float
+
 class EdgeNodeInfo(BaseModel):
     node_id: str
     hostname: str
@@ -11,6 +17,7 @@ class EdgeNodeInfo(BaseModel):
     location: Dict[str, str]  # country, city
     capabilities: List[str]
     status: str  # online, offline, busy
+    resources: Optional[NodeResources] = None
 
 class TaskRequest(BaseModel):
     task_type: str

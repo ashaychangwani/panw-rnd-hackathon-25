@@ -494,27 +494,6 @@ export function ProfessionalDashboard() {
           </div>
         )}
 
-        {/* Demo Instructions */}
-        <section className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-          <div className="flex items-start gap-4">
-            <div className="flex items-center justify-center w-10 h-10 bg-blue-100 rounded-lg flex-shrink-0">
-              <Shield className="h-5 w-5 text-blue-600" />
-            </div>
-            <div className="space-y-3">
-              <h3 className="text-lg font-semibold text-blue-900">Demo Platform Instructions</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-800">
-                <div className="space-y-2">
-                  <p><strong>Edge Nodes:</strong> Three demo nodes with different capabilities and locations</p>
-                  <p><strong>Threat Simulation:</strong> Click &ldquo;Simulate Threat&rdquo; to trigger automated analysis workflow</p>
-                </div>
-                <div className="space-y-2">
-                  <p><strong>Automated Workflow:</strong> Watch real-time threat analysis progress across all nodes</p>
-                  <p><strong>Fleet Monitoring:</strong> Monitor node status, resource usage, and analysis results</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
       </main>
     </div>
   )
