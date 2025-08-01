@@ -21,6 +21,10 @@ class Settings(BaseSettings):
         "http://localhost:8003"
     ]
     
+    # Google Cloud Configuration
+    google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+    google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    
     class Config:
         env_file = ".env"
 

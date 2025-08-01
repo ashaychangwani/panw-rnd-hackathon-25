@@ -26,7 +26,8 @@ def main():
         host=os.getenv("HOST"),
         port=int(os.getenv("PORT")),
         log_level=os.getenv("LOG_LEVEL").lower(),
-        reload=True
+        reload=True,
+        log_config=None  # Disable uvicorn's default logging config to use ours
     )
 
 if __name__ == "__main__":

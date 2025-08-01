@@ -1,17 +1,25 @@
-import google.generativeai as genai
+import warnings
+from google import genai
+from google.genai import types
 from typing import Dict, Any, List
 import json
 import logging
 from app.core.config import settings
 from app.models.threat_analysis import ImplementationPlan, IoC
 
+# Suppress pydantic field shadowing warnings from Google genai library
+warnings.filterwarnings("ignore", message="Field name .* shadows an attribute in parent", category=UserWarning)
+
 logger = logging.getLogger(__name__)
 
 class GeminiService:
     def __init__(self):
-        # Use gcloud default authentication
-        genai.configure()
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        # Use gcloud default authentication for Vertex AI
+        self.client = genai.Client(
+            vertexai=True,
+            project=settings.google_cloud_project,
+            location=settings.google_cloud_location
+        )
     
     def analyze_threat_blog(self, blog_content: str) -> ImplementationPlan:
         """
@@ -19,34 +27,34 @@ class GeminiService:
         Uses function calling to ensure structured output.
         """
         
-        # Define the function schema for structured output
+        # Define the function schema for structured output using the new SDK
         threat_analysis_schema = {
-            "type": "object",
+            "type": "OBJECT",
             "properties": {
                 "hypothesis": {
-                    "type": "string",
+                    "type": "STRING",
                     "description": "A detailed hypothesis about the threat based on the blog content"
                 },
                 "iocs_and_ttps": {
-                    "type": "array",
+                    "type": "ARRAY",
                     "items": {
-                        "type": "object",
+                        "type": "OBJECT",
                         "properties": {
                             "indicator": {
-                                "type": "string",
+                                "type": "STRING",
                                 "description": "The specific indicator or TTP name"
                             },
                             "type": {
-                                "type": "string",
+                                "type": "STRING",
                                 "enum": ["IOC", "TTP"],
                                 "description": "Whether this is an Indicator of Compromise or Tactic/Technique/Procedure"
                             },
                             "search_description": {
-                                "type": "string",
+                                "type": "STRING",
                                 "description": "Detailed description of how to search for this indicator"
                             },
                             "priority": {
-                                "type": "string",
+                                "type": "STRING",
                                 "enum": ["high", "medium", "low"],
                                 "description": "Priority level for this indicator"
                             }
@@ -58,15 +66,15 @@ class GeminiService:
             "required": ["hypothesis", "iocs_and_ttps"]
         }
         
-        # Define the function for structured extraction
-        extract_threat_intel = genai.protos.FunctionDeclaration(
-            name="extract_threat_intelligence",
-            description="Extract structured threat intelligence from security blog content",
-            parameters=threat_analysis_schema
-        )
+        # Define the function for structured extraction using new SDK
+        extract_threat_intel = {
+            "name": "extract_threat_intelligence",
+            "description": "Extract structured threat intelligence from security blog content",
+            "parameters": threat_analysis_schema
+        }
         
-        # Create the tool
-        threat_tool = genai.protos.Tool(function_declarations=[extract_threat_intel])
+        # Create the tool using new SDK
+        threat_tool = types.Tool(function_declarations=[extract_threat_intel])
         
         # Craft the prompt
         prompt = f"""
@@ -90,33 +98,91 @@ class GeminiService:
         """
         
         try:
-            # Generate response with function calling
-            response = self.model.generate_content(
-                prompt,
-                tools=[threat_tool],
-                tool_config={'function_calling_config': {'mode': 'ANY'}}
+            logger.info("Sending request to Gemini API for threat analysis")
+            
+            # Generate response with function calling using new SDK
+            response = self.client.models.generate_content(
+                model='gemini-2.5-pro',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[threat_tool],
+                    http_options=types.HttpOptions(extra_body={'tool_config': {'function_calling_config': {'mode': 'COMPOSITIONAL'}}}),
+                )
             )
             
+            logger.info("Received response from Gemini API")
+            
+            # Validate response structure
+            if not response:
+                logger.error("Gemini API returned None response")
+                return self._get_fallback_plan(blog_content)
+                
+            if not response.candidates:
+                logger.error("Gemini API response has no candidates")
+                return self._get_fallback_plan(blog_content)
+                
+            if not response.candidates[0].content.parts:
+                logger.error("Gemini API response candidate has no content parts")
+                return self._get_fallback_plan(blog_content)
+            
             # Extract the function call result
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if part.function_call and part.function_call.name == "extract_threat_intelligence":
+            logger.info(f"Processing {len(response.candidates[0].content.parts)} response parts")
+            
+            for i, part in enumerate(response.candidates[0].content.parts):
+                logger.debug(f"Processing part {i}: has function_call={hasattr(part, 'function_call')}")
+                
+                if hasattr(part, 'function_call') and part.function_call and part.function_call.name == "extract_threat_intelligence":
+                    logger.info("Found threat intelligence function call in response")
+                    
+                    try:
                         result_data = dict(part.function_call.args)
+                        logger.info(f"Extracted function call data with keys: {list(result_data.keys())}")
                         
+                        # Validate required fields
+                        if "iocs_and_ttps" not in result_data:
+                            logger.error("Function call result missing 'iocs_and_ttps' field")
+                            continue
+                            
                         # Convert to Pydantic models
-                        iocs = [IoC(**ioc) for ioc in result_data.get("iocs_and_ttps", [])]
+                        iocs_data = result_data.get("iocs_and_ttps", [])
+                        logger.info(f"Converting {len(iocs_data)} IoCs to Pydantic models")
                         
-                        return ImplementationPlan(
+                        iocs = []
+                        for j, ioc_data in enumerate(iocs_data):
+                            try:
+                                ioc = IoC(**ioc_data)
+                                iocs.append(ioc)
+                                logger.debug(f"Successfully converted IoC {j}: {ioc.indicator}")
+                            except Exception as ioc_error:
+                                logger.error(f"Failed to convert IoC {j} to Pydantic model: {str(ioc_error)}")
+                                logger.error(f"IoC data: {ioc_data}")
+                        
+                        plan = ImplementationPlan(
                             hypothesis=result_data.get("hypothesis", ""),
                             iocs_and_ttps=iocs
                         )
+                        
+                        logger.info(f"Successfully created ImplementationPlan with {len(iocs)} IoCs")
+                        return plan
+                        
+                    except Exception as parse_error:
+                        logger.error(f"Error parsing function call result: {str(parse_error)}")
+                        logger.error(f"Function call args: {part.function_call.args}")
+                        continue
             
             # Fallback if function calling fails
-            logger.warning("Function calling failed, attempting text parsing")
-            return self._parse_text_response(response.text)
+            logger.warning("No valid function call found, attempting text parsing")
+            if hasattr(response, 'text') and response.text:
+                return self._parse_text_response(response.text)
+            else:
+                logger.error("Response has no text content for fallback parsing")
+                return self._get_fallback_plan(blog_content)
             
         except Exception as e:
-            logger.error(f"Error in Gemini analysis: {str(e)}")
+            logger.error(f"Critical error in Gemini analysis: {str(e)}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Return a basic fallback response
             return self._get_fallback_plan(blog_content)
     

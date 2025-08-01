@@ -13,6 +13,7 @@ import {
   ThreatCategory
 } from '@/types/orchestration'
 import { generateId } from '@/lib/utils'
+import { apiClient, getErrorMessage, EdgeNodeInfo } from '@/lib/api-client'
 
 interface OrchestrationStore {
   // State
@@ -21,6 +22,11 @@ interface OrchestrationStore {
   campaigns: ThreatCampaign[]
   intelligenceSources: IntelligenceSource[]
   systemMetrics: SystemMetrics
+  isLoading: boolean
+  errors: Record<string, string>
+  
+  // WebSocket connections
+  activeConnections: Map<string, WebSocket>
   
   // Actions
   // Edge Node Management
@@ -28,12 +34,15 @@ interface OrchestrationStore {
   updateNodeStatus: (nodeId: string, status: NodeStatus) => void
   updateNodeResources: (nodeId: string, resources: Partial<EdgeNode['resources']>) => void
   removeEdgeNode: (nodeId: string) => void
+  discoverEdgeNodes: () => Promise<void>
   
   // Threat Analysis Management
-  startThreatAnalysis: (sourceUrl: string, sourceName: string, threatTitle: string) => void
+  startThreatAnalysis: (sourceUrl: string, sourceName: string, threatTitle: string) => Promise<void>
   updateAnalysisStatus: (analysisId: string, status: AnalysisStatus) => void
   updateWorkflowStep: (analysisId: string, stepId: string, updates: Partial<WorkflowStep>) => void
   completeAnalysis: (analysisId: string, success: boolean) => void
+  subscribeToAnalysis: (analysisId: string) => void
+  unsubscribeFromAnalysis: (analysisId: string) => void
   
   // Campaign Management
   createCampaign: (name: string, description: string, triggerData: any) => void
@@ -43,11 +52,13 @@ interface OrchestrationStore {
   addIntelligenceSource: (url: string, title: string, description: string, categories?: ThreatCategory[]) => void
   removeIntelligenceSource: (sourceId: string) => void
   toggleIntelligenceSource: (sourceId: string) => void
-  simulateNewThreat: (sourceId: string) => void
+  simulateNewThreat: (sourceId: string) => Promise<void>
   
   // System Operations
   refreshSystemMetrics: () => void
-  simulateWorkflowProgress: (analysisId: string) => void
+  setLoading: (loading: boolean) => void
+  setError: (key: string, error: string) => void
+  clearError: (key: string) => void
 }
 
 // Demo edge nodes
@@ -125,18 +136,13 @@ const DEMO_INTEL_SOURCES: Omit<IntelligenceSource, 'id'>[] = [
 ]
 
 export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
-  edgeNodes: DEMO_EDGE_NODES.map(node => ({ 
-    ...node, 
-    id: generateId(), 
-    connectedAt: new Date(Date.now() - Math.random() * 24 * 60 * 60 * 1000),
-    lastPing: new Date(Date.now() - Math.random() * 5 * 60 * 1000)
-  })),
+  edgeNodes: [], // Start with empty array and discover nodes via API
   threatAnalyses: [],
   campaigns: [],
   intelligenceSources: DEMO_INTEL_SOURCES.map(source => ({ ...source, id: generateId() })),
   systemMetrics: {
-    totalNodes: 3,
-    onlineNodes: 2,
+    totalNodes: 0,
+    onlineNodes: 0,
     activeSources: 3,
     activeAnalyses: 0,
     completedAnalyses: 12,
@@ -146,6 +152,9 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
     activeCampaigns: 0,
     completedCampaigns: 0
   },
+  isLoading: false,
+  errors: {},
+  activeConnections: new Map(),
 
   // Edge Node Management
   addEdgeNode: (nodeData) => {
@@ -197,103 +206,191 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
     get().refreshSystemMetrics()
   },
 
-  // Threat Analysis Management
-  startThreatAnalysis: (sourceUrl: string, sourceName: string, threatTitle: string) => {
-    const newAnalysis: ThreatAnalysis = {
-      id: generateId(),
-      threatTitle,
-      sourceUrl,
-      sourceName,
-      status: 'detected',
-      detectedAt: new Date(),
-      priority: 'medium',
-      threatCategories: ['general'] as ThreatCategory[],
-      extractedIoCs: {
-        ips: [],
-        domains: [],
-        hashes: [],
-        patterns: []
-      },
-      workflow: {
-        steps: [
-          {
-            id: generateId(),
-            name: 'Blog Detection',
-            description: 'Analyze threat intelligence from blog source',
-            type: 'blog-detection',
-            status: 'pending',
-            progress: 0,
-            allNodes: false,
-            affectedNodes: [],
-            estimatedDuration: 30
+  discoverEdgeNodes: async () => {
+    try {
+      set(state => ({ 
+        ...state, 
+        isLoading: true,
+        errors: { ...state.errors, edgeNodes: '' }
+      }))
+
+      const backendNodes = await apiClient.discoverEdgeNodes()
+      
+      // Map backend EdgeNodeInfo to frontend EdgeNode format
+      const discoveredNodes: EdgeNode[] = backendNodes.map(backendNode => {
+        // Map backend capabilities to frontend capabilities
+        const capabilityMap: Record<string, NodeCapability> = {
+          'threat-hunting': 'malware-analysis',
+          'log-analysis': 'log-analysis',
+          'file-scanning': 'file-analysis',
+          'network-monitoring': 'network-scanning',
+          'process-inspection': 'memory-forensics',
+          'windows-analysis': 'windows-analysis',
+          'linux-analysis': 'linux-analysis',
+          'macos-analysis': 'macos-analysis',
+          'registry-analysis': 'registry-analysis'
+        }
+        
+        const mappedCapabilities = backendNode.capabilities
+          .map(cap => capabilityMap[cap] || cap)
+          .filter(cap => ['windows-analysis', 'linux-analysis', 'macos-analysis', 'network-scanning', 'malware-analysis', 'memory-forensics', 'log-analysis', 'registry-analysis', 'file-analysis'].includes(cap)) as NodeCapability[]
+        
+        // Add OS-specific analysis capability
+        const osSpecificCapability = `${backendNode.os_type}-analysis` as NodeCapability
+        if (!mappedCapabilities.includes(osSpecificCapability)) {
+          mappedCapabilities.unshift(osSpecificCapability)
+        }
+        
+        // Add registry analysis for Windows nodes
+        if (backendNode.os_type === 'windows' && !mappedCapabilities.includes('registry-analysis')) {
+          mappedCapabilities.push('registry-analysis')
+        }
+        
+        return {
+          id: backendNode.node_id,
+          hostname: backendNode.hostname,
+          ipAddress: backendNode.ip_address,
+          status: backendNode.status as NodeStatus,
+          capabilities: mappedCapabilities,
+          osType: backendNode.os_type as 'windows' | 'linux' | 'macos',
+          osVersion: backendNode.os_version,
+          location: backendNode.location ? {
+            country: backendNode.location.country,
+            city: backendNode.location.city
+          } : undefined,
+          resources: {
+            cpu: Math.floor(Math.random() * 50),  // Simulated for now
+            memory: Math.floor(Math.random() * 50),
+            network: Math.floor(Math.random() * 30),
+            disk: Math.floor(Math.random() * 80)
           },
-          {
-            id: generateId(),
-            name: 'IoC Extraction',
-            description: 'Extract indicators of compromise',
-            type: 'ioc-extraction',
-            status: 'pending',
-            progress: 0,
-            allNodes: false,
-            affectedNodes: [],
-            estimatedDuration: 60
-          },
-          {
-            id: generateId(),
-            name: 'Fleet Deployment',
-            description: 'Deploy analysis tasks to edge nodes',
-            type: 'fleet-deployment',
-            status: 'pending',
-            progress: 0,
-            allNodes: true,
-            affectedNodes: [],
-            estimatedDuration: 45
-          },
-          {
-            id: generateId(),
-            name: 'Node Scanning',
-            description: 'Scan edge nodes for threat indicators',
-            type: 'node-scanning',
-            status: 'pending',
-            progress: 0,
-            allNodes: true,
-            affectedNodes: [],
-            estimatedDuration: 120
-          },
-          {
-            id: generateId(),
-            name: 'Evidence Correlation',
-            description: 'Correlate findings across all nodes',
-            type: 'evidence-correlation',
-            status: 'pending',
-            progress: 0,
-            allNodes: false,
-            affectedNodes: [],
-            estimatedDuration: 90
-          }
-        ],
-        connections: []
-      },
-      nodeResults: {},
-      overallThreatLevel: 'none',
-      compromisedNodes: [],
-      mitigationActions: [],
-      isDemo: true
+          lastPing: new Date(),
+          connectedAt: new Date(),
+          currentTasks: [],
+          isDemo: false
+        }
+      })
+      
+      // Replace all nodes with discovered ones (don't append, replace)
+      set(state => ({
+        ...state,
+        edgeNodes: discoveredNodes,
+        isLoading: false
+      }))
+      
+      get().refreshSystemMetrics()
+    } catch (error) {
+      console.error('Error discovering edge nodes:', error)
+      set(state => ({
+        ...state,
+        isLoading: false,
+        errors: { 
+          ...state.errors, 
+          edgeNodes: getErrorMessage(error)
+        }
+      }))
     }
+  },
 
-    set(state => ({
-      threatAnalyses: [...state.threatAnalyses, newAnalysis],
-      systemMetrics: {
-        ...state.systemMetrics,
-        activeAnalyses: state.systemMetrics.activeAnalyses + 1
+  // Threat Analysis Management
+  startThreatAnalysis: async (sourceUrl: string, sourceName: string, threatTitle: string) => {
+    try {
+      set(state => ({ 
+        ...state, 
+        isLoading: true,
+        errors: { ...state.errors, threatAnalysis: '' }
+      }))
+
+      // Call the backend API to start the analysis
+      const response = await apiClient.startThreatAnalysis(sourceUrl)
+      
+      // Create a new threat analysis with the response data
+      const newAnalysis: ThreatAnalysis = {
+        id: response.analysis_id,
+        threatTitle,
+        sourceUrl,
+        sourceName,
+        status: 'analyzing',
+        detectedAt: new Date(),
+        priority: 'medium',
+        threatCategories: ['general'] as ThreatCategory[],
+        extractedIoCs: {
+          ips: [],
+          domains: [],
+          hashes: [],
+          patterns: []
+        },
+        workflow: {
+          steps: [
+            {
+              id: generateId(),
+              name: 'Blog Analysis',
+              description: 'Analyzing threat intelligence from blog source',
+              type: 'blog-analysis',
+              status: 'running',
+              progress: 0,
+              allNodes: false,
+              affectedNodes: [],
+              estimatedDuration: 60
+            }
+          ],
+          connections: []
+        },
+        nodeResults: {},
+        overallThreatLevel: 'none',
+        compromisedNodes: [],
+        mitigationActions: [],
+        isDemo: false
       }
-    }))
 
-    // Auto-start analysis after a delay
-    setTimeout(() => {
-      get().updateAnalysisStatus(newAnalysis.id, 'analyzing')
-      get().simulateWorkflowProgress(newAnalysis.id)
-    }, 1000)
+      set(state => ({
+        ...state,
+        threatAnalyses: [...state.threatAnalyses, newAnalysis],
+        systemMetrics: {
+          ...state.systemMetrics,
+          activeAnalyses: state.systemMetrics.activeAnalyses + 1
+        },
+        isLoading: false
+      }))
+
+      // Subscribe to real-time updates
+      get().subscribeToAnalysis(response.analysis_id)
+      
+    } catch (error) {
+      console.error('Error starting threat analysis:', error)
+      
+      set(state => ({
+        ...state,
+        isLoading: false,
+        errors: { 
+          ...state.errors, 
+          threatAnalysis: getErrorMessage(error)
+        }
+      }))
+      
+      // Still create a local analysis for demo purposes
+      const demoAnalysis: ThreatAnalysis = {
+        id: generateId(),
+        threatTitle: `${threatTitle} (Failed)`,
+        sourceUrl,
+        sourceName,
+        status: 'failed',
+        detectedAt: new Date(),
+        priority: 'medium',
+        threatCategories: ['general'] as ThreatCategory[],
+        extractedIoCs: { ips: [], domains: [], hashes: [], patterns: [] },
+        workflow: { steps: [], connections: [] },
+        nodeResults: {},
+        overallThreatLevel: 'none',
+        compromisedNodes: [],
+        mitigationActions: [],
+        isDemo: true
+      }
+      
+      set(state => ({
+        threatAnalyses: [...state.threatAnalyses, demoAnalysis]
+      }))
+    }
   },
 
   // Campaign Management
@@ -446,6 +543,92 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
         completedAnalyses: state.systemMetrics.completedAnalyses + 1
       }
     }))
+    
+    // Cleanup WebSocket connection when analysis completes
+    get().unsubscribeFromAnalysis(analysisId)
+  },
+
+  subscribeToAnalysis: (analysisId: string) => {
+    // Don't create duplicate connections
+    if (get().activeConnections.has(analysisId)) {
+      return
+    }
+
+    try {
+      const ws = apiClient.connectToAnalysisStream(analysisId)
+      
+      ws.onopen = () => {
+        console.log(`WebSocket connected for analysis ${analysisId}`)
+      }
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          if (data.type === 'status_update' || data.type === 'live_update') {
+            const analysisData = data.data
+            
+            // Update the analysis with real backend data
+            set(state => ({
+              threatAnalyses: state.threatAnalyses.map(analysis =>
+                analysis.id === analysisId
+                  ? {
+                      ...analysis,
+                      status: analysisData.status === 'running' ? 'analyzing' : analysisData.status,
+                      workflow: {
+                        ...analysis.workflow,
+                        steps: analysisData.steps || analysis.workflow.steps
+                      },
+                      extractedIoCs: analysisData.implementation_plan?.iocs_and_ttps 
+                        ? {
+                            ips: analysisData.implementation_plan.iocs_and_ttps.filter((item: any) => item.type === 'IOC' && item.indicator.match(/^\d+\.\d+\.\d+\.\d+$/)).map((item: any) => item.indicator),
+                            domains: analysisData.implementation_plan.iocs_and_ttps.filter((item: any) => item.type === 'IOC' && item.indicator.includes('.')).map((item: any) => item.indicator),
+                            hashes: analysisData.implementation_plan.iocs_and_ttps.filter((item: any) => item.type === 'IOC' && /^[a-fA-F0-9]{32,64}$/.test(item.indicator)).map((item: any) => item.indicator),
+                            patterns: analysisData.implementation_plan.iocs_and_ttps.filter((item: any) => item.type === 'TTP').map((item: any) => item.indicator)
+                          }
+                        : analysis.extractedIoCs,
+                      nodeResults: analysisData.node_results || analysis.nodeResults,
+                      completedAt: analysisData.status === 'completed' ? new Date() : analysis.completedAt
+                    }
+                  : analysis
+              )
+            }))
+
+            // Complete analysis if backend says it's done
+            if (analysisData.status === 'completed' || analysisData.status === 'failed') {
+              get().completeAnalysis(analysisId, analysisData.status === 'completed')
+            }
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
+        }
+      }
+      
+      ws.onerror = (error) => {
+        console.error(`WebSocket error for analysis ${analysisId}:`, error)
+        get().setError('websocket', `Connection error for analysis ${analysisId}`)
+      }
+      
+      ws.onclose = () => {
+        console.log(`WebSocket closed for analysis ${analysisId}`)
+        get().activeConnections.delete(analysisId)
+      }
+      
+      // Store the connection
+      get().activeConnections.set(analysisId, ws)
+      
+    } catch (error) {
+      console.error('Error creating WebSocket connection:', error)
+      get().setError('websocket', getErrorMessage(error))
+    }
+  },
+
+  unsubscribeFromAnalysis: (analysisId: string) => {
+    const ws = get().activeConnections.get(analysisId)
+    if (ws) {
+      ws.close()
+      get().activeConnections.delete(analysisId)
+    }
   },
 
   // Intelligence Sources
@@ -487,15 +670,15 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
     }))
   },
 
-  simulateNewThreat: (sourceId: string) => {
+  simulateNewThreat: async (sourceId: string) => {
     const source = get().intelligenceSources.find(s => s.id === sourceId)
-    if (!source || !source.isDemo) return
+    if (!source) return
 
-    // Create a new threat analysis based on the intelligence source
-    get().startThreatAnalysis(
+    // Start real threat analysis using the source URL
+    await get().startThreatAnalysis(
       source.url,
       source.title,
-      `Threat detected from ${source.title}`
+      `Threat Analysis - ${source.title}`
     )
   },
 
@@ -517,59 +700,34 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
     }))
   },
 
-  // Helper method for simulating workflow progress
-  simulateWorkflowProgress: (analysisId: string) => {
-    const analysis = get().threatAnalyses.find(a => a.id === analysisId)
-    if (!analysis) return
+  // Utility functions
+  setLoading: (loading: boolean) => {
+    set(state => ({ ...state, isLoading: loading }))
+  },
 
-    // Progress through workflow steps automatically
-    const steps = analysis.workflow.steps
-    let currentStepIndex = steps.findIndex(step => step.status === 'running')
-    
-    if (currentStepIndex === -1) {
-      currentStepIndex = steps.findIndex(step => step.status === 'pending')
-    }
+  setError: (key: string, error: string) => {
+    set(state => ({
+      ...state,
+      errors: { ...state.errors, [key]: error }
+    }))
+  },
 
-    if (currentStepIndex >= 0 && currentStepIndex < steps.length) {
-      const currentStep = steps[currentStepIndex]
-      
-      // Start the current step if not already running
-      if (currentStep.status === 'pending') {
-        get().updateWorkflowStep(analysisId, currentStep.id, { 
-          status: 'running', 
-          startedAt: new Date() 
-        })
-      }
-
-      // Simulate progress
-      let progress = currentStep.progress || 0
-      const progressInterval = setInterval(() => {
-        progress += Math.random() * 15 + 5
-        if (progress >= 100) {
-          progress = 100
-          get().updateWorkflowStep(analysisId, currentStep.id, { 
-            status: 'completed', 
-            progress,
-            completedAt: new Date() 
-          })
-          clearInterval(progressInterval)
-          
-          // Start next step after delay
-          if (currentStepIndex < steps.length - 1) {
-            setTimeout(() => {
-              get().simulateWorkflowProgress(analysisId)
-            }, 1500)
-          } else {
-            // All steps completed
-            get().completeAnalysis(analysisId, true)
-          }
-        } else {
-          get().updateWorkflowStep(analysisId, currentStep.id, { progress })
-        }
-      }, 800)
-    }
+  clearError: (key: string) => {
+    set(state => {
+      const newErrors = { ...state.errors }
+      delete newErrors[key]
+      return { ...state, errors: newErrors }
+    })
   }
 }))
+
+// Auto-discover edge nodes on store initialization
+if (typeof window !== 'undefined') {
+  // Only run in browser, not during SSR
+  setTimeout(() => {
+    useOrchestrationStore.getState().discoverEdgeNodes()
+  }, 1000) // Small delay to ensure store is ready
+}
 
 // Legacy export for compatibility during migration
 export const useBlogStore = useOrchestrationStore

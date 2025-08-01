@@ -4,6 +4,7 @@ from typing import Dict, Any
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 from app.core.database import get_database
 from app.models.threat_analysis import ThreatAnalysisRequest, ThreatAnalysisResponse, ThreatAnalysisStatus
@@ -14,6 +15,13 @@ router = APIRouter()
 
 # Store active WebSocket connections
 active_connections: Dict[str, WebSocket] = {}
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle datetime objects"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 @router.post("/start", response_model=ThreatAnalysisResponse)
 async def start_threat_analysis(
@@ -113,7 +121,7 @@ async def websocket_analysis_stream(websocket: WebSocket, analysis_id: str):
                     await websocket.send_text(json.dumps({
                         "type": "status_update",
                         "data": status
-                    }))
+                    }, cls=DateTimeEncoder))
                     
                     # If analysis is completed or failed, stop streaming
                     if status["status"] in ["completed", "failed"]:
@@ -129,7 +137,7 @@ async def websocket_analysis_stream(websocket: WebSocket, analysis_id: str):
                 await websocket.send_text(json.dumps({
                     "type": "error",
                     "message": str(e)
-                }))
+                }, cls=DateTimeEncoder))
                 break
     
     except WebSocketDisconnect:
@@ -148,7 +156,7 @@ async def notify_analysis_update(analysis_id: str, update_data: Dict[str, Any]):
             await websocket.send_text(json.dumps({
                 "type": "live_update",
                 "data": update_data
-            }))
+            }, cls=DateTimeEncoder))
         except Exception as e:
             logger.error(f"Error sending WebSocket update: {str(e)}")
             # Remove failed connection

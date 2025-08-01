@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { useBlogStore } from '@/store/blog-store'
+import { useOrchestrationStore } from '@/store/orchestration-store'
 import { Plus, Globe } from 'lucide-react'
 
 export function AddBlogForm() {
@@ -11,51 +11,28 @@ export function AddBlogForm() {
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-
-  const { addBlog } = useBlogStore()
+  const { startThreatAnalysis, isLoading: storeLoading } = useOrchestrationStore()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!url.trim()) return
 
-    setIsLoading(true)
     try {
-      // Call the new backend API for threat analysis
-      const response = await fetch('http://localhost:8000/api/v1/threat-analysis/start', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          blog_url: url.trim()
-        })
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const result = await response.json()
+      // Use the orchestration store to start threat analysis
+      await startThreatAnalysis(
+        url.trim(),
+        title.trim() || 'Unknown Source',
+        description.trim() || `Analysis from ${url.trim()}`
+      )
       
-      // Start threat analysis with the returned analysis ID
-      addBlog(url.trim(), title.trim() || `Analysis ${result.analysis_id}`, description.trim())
-      
-      // Reset form
+      // Reset form on success
       setUrl('')
       setTitle('')
       setDescription('')
       setIsOpen(false)
     } catch (error) {
       console.error('Error starting threat analysis:', error)
-      // Still add to the UI for demo purposes, but show it failed
-      addBlog(url.trim(), title.trim() || 'Analysis (Failed)', description.trim())
-      setUrl('')
-      setTitle('')
-      setDescription('')
-      setIsOpen(false)
-    } finally {
-      setIsLoading(false)
+      // Form stays open so user can retry
     }
   }
 
@@ -135,10 +112,10 @@ export function AddBlogForm() {
           <div className="flex gap-2 pt-2">
             <Button 
               type="submit" 
-              disabled={isLoading || !url.trim() || !title.trim()}
+              disabled={storeLoading || !url.trim() || !title.trim()}
               className="flex-1"
             >
-              {isLoading ? 'Adding...' : 'Add Blog'}
+              {storeLoading ? 'Starting Analysis...' : 'Start Threat Analysis'}
             </Button>
             <Button 
               type="button" 

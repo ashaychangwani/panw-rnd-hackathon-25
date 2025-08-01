@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 import uuid
 import logging
 from typing import Dict, List, Optional, Any
@@ -64,16 +65,44 @@ class OrchestrationService:
             
             # Step 2: Extract IoCs using Gemini
             await self._update_analysis_status(analysis_id, AnalysisStatus.EXTRACTING_IOCS)
+            logger.info(f"Starting LLM analysis for blog content (length: {len(blog_content)} chars)")
+            
             implementation_plan = self.gemini_service.analyze_threat_blog(blog_content)
+            
+            # Validate that the implementation plan was properly generated
+            if not implementation_plan:
+                await self._fail_analysis(analysis_id, "LLM failed to generate implementation plan - returned None")
+                return
+            
+            logger.info(f"LLM successfully generated implementation plan with hypothesis: {implementation_plan.hypothesis[:200]}...")
+            logger.info(f"LLM extracted {len(implementation_plan.iocs_and_ttps)} IoCs/TTPs")
+            
+            # Log each extracted IoC/TTP for debugging
+            for i, ioc in enumerate(implementation_plan.iocs_and_ttps):
+                logger.info(f"IoC/TTP {i+1}: {ioc.indicator} (type: {ioc.type}, priority: {ioc.priority})")
             
             # Step 3: Generate workflow steps
             await self._update_analysis_status(analysis_id, AnalysisStatus.PLANNING)
             workflow_steps = self._generate_workflow_steps(implementation_plan)
+            logger.info(f"Generated {len(workflow_steps)} workflow steps")
+            logger.info(f"Implementation Plan: Hypothesis {implementation_plan.hypothesis}")
+            logger.info(f"Implementation Plan: IoCs/TTPs {implementation_plan.iocs_and_ttps}")
+            
             
             # Update database with plan and steps
-            analysis.implementation_plan = implementation_plan.dict()
-            analysis.workflow_steps = [step.dict() for step in workflow_steps]
+            plan_dict = implementation_plan.model_dump() if hasattr(implementation_plan, 'model_dump') else implementation_plan.dict()
+            workflow_steps_dict = [step.model_dump() if hasattr(step, 'model_dump') else step.dict() for step in workflow_steps]
+            
+            analysis.implementation_plan = plan_dict
+            analysis.workflow_steps = workflow_steps_dict
             self.db.commit()
+            
+            # Simple verification
+            if not analysis.implementation_plan:
+                await self._fail_analysis(analysis_id, "Implementation plan failed to save to database")
+                return
+            
+            logger.info(f"Implementation plan saved with {len(plan_dict.get('iocs_and_ttps', []))} IoCs/TTPs")
             
             # Step 4: Distribute tasks to edge nodes
             await self._update_analysis_status(analysis_id, AnalysisStatus.DISTRIBUTING)
@@ -96,6 +125,7 @@ class OrchestrationService:
             
         except Exception as e:
             logger.error(f"Error in threat analysis {analysis_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             await self._fail_analysis(analysis_id, str(e))
         finally:
             # Clean up
@@ -158,32 +188,56 @@ class OrchestrationService:
                 analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
                 plan_data = analysis.implementation_plan
                 
+                # Validate that plan_data exists and is properly structured
+                if not plan_data:
+                    logger.error(f"Implementation plan is None for analysis {analysis_id} - cannot distribute task for step {step.name} {plan_data}")
+                    continue
+                
+                if not isinstance(plan_data, dict):
+                    logger.error(f"Implementation plan is not a dictionary for analysis {analysis_id}: {type(plan_data)}")
+                    continue
+                
+                if "iocs_and_ttps" not in plan_data:
+                    logger.error(f"Implementation plan missing 'iocs_and_ttps' key for analysis {analysis_id}: {list(plan_data.keys())}")
+                    continue
+                
+                logger.info(f"Retrieved implementation plan with {len(plan_data.get('iocs_and_ttps', []))} IoCs/TTPs for step: {step.name}")
+                
                 # Find the corresponding IoC
                 indicator_data = None
-                for ioc in plan_data.get("iocs_and_ttps", []):
-                    if step.name.endswith(ioc["indicator"]):
+                iocs_list = plan_data.get("iocs_and_ttps", [])
+                logger.debug(f"Searching for indicator matching step name '{step.name}' in {len(iocs_list)} IoCs")
+                
+                for ioc in iocs_list:
+                    logger.debug(f"Checking IoC: {ioc.get('indicator', 'NO_INDICATOR')} against step name ending")
+                    if step.name.endswith(ioc.get("indicator", "")):
                         indicator_data = ioc
+                        logger.info(f"Found matching IoC for step '{step.name}': {ioc.get('indicator')}")
                         break
                 
-                if indicator_data:
-                    task_parameters = {
-                        "indicator": indicator_data["indicator"],
-                        "type": indicator_data["type"],
-                        "search_description": indicator_data["search_description"],
-                        "priority": indicator_data["priority"],
-                        "analysis_id": analysis_id,
-                        "step_id": step.step_id
-                    }
-                    
-                    # Submit to all nodes
-                    job_mappings = await self.edge_service.distribute_task_to_all_nodes(
-                        step.task_type, task_parameters
-                    )
-                    
-                    # Update step with job mappings
-                    step.assigned_nodes = list(job_mappings.keys())
-                    step.job_ids = job_mappings
-                    step.status = "running"
+                if not indicator_data:
+                    logger.warning(f"No matching IoC found for step '{step.name}' in implementation plan. Available indicators: {[ioc.get('indicator', 'NO_INDICATOR') for ioc in iocs_list]}")
+                    continue
+                
+                # We have valid indicator_data, proceed with task creation
+                task_parameters = {
+                    "indicator": indicator_data["indicator"],
+                    "type": indicator_data["type"],
+                    "search_description": indicator_data["search_description"],
+                    "priority": indicator_data["priority"],
+                    "analysis_id": analysis_id,
+                    "step_id": step.step_id
+                }
+                
+                # Submit to all nodes
+                job_mappings = await self.edge_service.distribute_task_to_all_nodes(
+                    step.task_type, task_parameters
+                )
+                
+                # Update step with job mappings
+                step.assigned_nodes = list(job_mappings.keys())
+                step.job_ids = job_mappings
+                step.status = "running"
         
         # Update database
         analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
@@ -274,7 +328,6 @@ class OrchestrationService:
         # Store aggregated results
         analysis.node_results = node_results
         self.db.commit()
-        
         logger.info(f"Correlated results from {len(node_results)} nodes for analysis {analysis_id}")
     
     async def _update_analysis_status(self, analysis_id: str, status: AnalysisStatus):

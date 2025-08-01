@@ -30,11 +30,15 @@ export function ProfessionalDashboard() {
     threatAnalyses, 
     intelligenceSources,
     systemMetrics,
+    isLoading,
+    errors,
     startThreatAnalysis,
     addIntelligenceSource,
     removeIntelligenceSource,
     toggleIntelligenceSource,
-    simulateNewThreat
+    simulateNewThreat,
+    discoverEdgeNodes,
+    clearError
   } = useOrchestrationStore()
 
   const [activeTab, setActiveTab] = useState<'overview' | 'fleet' | 'sources' | 'analyses'>('overview')
@@ -45,12 +49,32 @@ export function ProfessionalDashboard() {
     ? threatAnalyses.find(a => a.id === selectedAnalysis) 
     : activeAnalyses[0]
 
-  const handleCreateDemoAnalysis = () => {
-    startThreatAnalysis(
-      'https://unit42.paloaltonetworks.com/apache-log4j-vulnerability-cve-2021-44228/',
-      'Unit 42 - Palo Alto Networks',
-      `Log4j Threat Detection - ${new Date().toLocaleTimeString()}`
-    )
+  const handleCreateDemoAnalysis = async () => {
+    try {
+      await startThreatAnalysis(
+        'https://unit42.paloaltonetworks.com/apache-log4j-vulnerability-cve-2021-44228/',
+        'Unit 42 - Palo Alto Networks',
+        `Log4j Threat Detection - ${new Date().toLocaleTimeString()}`
+      )
+    } catch (error) {
+      console.error('Failed to start threat analysis:', error)
+    }
+  }
+
+  const handleDiscoverNodes = async () => {
+    try {
+      await discoverEdgeNodes()
+    } catch (error) {
+      console.error('Failed to discover edge nodes:', error)
+    }
+  }
+
+  const handleSimulateThreat = async (sourceId: string) => {
+    try {
+      await simulateNewThreat(sourceId)
+    } catch (error) {
+      console.error('Failed to simulate threat:', error)
+    }
   }
 
   return (
@@ -175,9 +199,13 @@ export function ProfessionalDashboard() {
                     </select>
                   )}
                   
-                  <Button onClick={handleCreateDemoAnalysis} className="flex items-center gap-2">
+                  <Button 
+                    onClick={handleCreateDemoAnalysis} 
+                    className="flex items-center gap-2"
+                    disabled={isLoading}
+                  >
                     <Plus className="w-4 h-4" />
-                    Simulate Threat
+                    {isLoading ? 'Starting...' : 'Simulate Threat'}
                   </Button>
                 </div>
               </div>
@@ -236,11 +264,48 @@ export function ProfessionalDashboard() {
         )}
 
         {activeTab === 'fleet' && (
-          <EdgeNodeFleet 
-            nodes={edgeNodes}
-            onAddNode={() => console.log('Add node clicked')}
-            onNodeClick={(node) => console.log('Node clicked:', node)}
-          />
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-8 h-8 bg-blue-100 rounded-lg">
+                  <Monitor className="h-4 w-4 text-blue-600" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">Edge Node Fleet</h2>
+                  <p className="text-sm text-gray-500">Manage and monitor distributed edge nodes</p>
+                </div>
+              </div>
+              <Button 
+                onClick={handleDiscoverNodes} 
+                className="flex items-center gap-2"
+                disabled={isLoading}
+              >
+                <Plus className="w-4 h-4" />
+                {isLoading ? 'Discovering...' : 'Discover Nodes'}
+              </Button>
+            </div>
+            
+            <EdgeNodeFleet 
+              nodes={edgeNodes}
+              onAddNode={handleDiscoverNodes}
+              onNodeClick={(node) => console.log('Node clicked:', node)}
+            />
+            
+            {errors.edgeNodes && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-red-700 text-sm">
+                  Error discovering edge nodes: {errors.edgeNodes}
+                </p>
+                <Button 
+                  onClick={() => clearError('edgeNodes')} 
+                  className="mt-2 text-xs"
+                  variant="outline"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
         )}
 
         {activeTab === 'sources' && (
@@ -275,10 +340,41 @@ export function ProfessionalDashboard() {
                   source={source}
                   onToggle={toggleIntelligenceSource}
                   onRemove={removeIntelligenceSource}
-                  onSimulateThreat={simulateNewThreat}
+                  onSimulateThreat={handleSimulateThreat}
                 />
               ))}
             </div>
+
+            {/* Error Messages */}
+            {errors.threatAnalysis && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-red-700 text-sm">
+                  Error starting threat analysis: {errors.threatAnalysis}
+                </p>
+                <Button 
+                  onClick={() => clearError('threatAnalysis')} 
+                  className="mt-2 text-xs"
+                  variant="outline"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
+            
+            {errors.websocket && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="text-yellow-700 text-sm">
+                  WebSocket connection issue: {errors.websocket}
+                </p>
+                <Button 
+                  onClick={() => clearError('websocket')} 
+                  className="mt-2 text-xs"
+                  variant="outline"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
 
             {intelligenceSources.length === 0 && (
               <div className="bg-white border border-gray-200 rounded-xl p-12 text-center">

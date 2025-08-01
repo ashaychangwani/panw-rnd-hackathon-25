@@ -20,11 +20,11 @@ if ! command -v uv &> /dev/null; then
     exit 1
 fi
 
-echo "🔧 Installing backend dependencies with uv..."
-cd backend
+echo "🔧 Installing dependencies with uv..."
 uv sync > /dev/null 2>&1
 
 echo "🎛️  Starting Control Server (port 8000)..."
+cd backend
 uv run python start_server.py &
 CONTROL_PID=$!
 
@@ -33,9 +33,6 @@ sleep 2
 
 echo "🌐 Starting Edge Node Simulators..."
 cd ../edge-backend
-
-# Install edge backend dependencies
-uv sync > /dev/null 2>&1
 
 # Start edge nodes
 echo "  📍 Starting Edge Node 1 (Windows, NYC, port 8001)..."
