@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useRef, useState } from 'react'
-import { ThreatAnalysis, WorkflowStep, WorkflowConnection } from '@/types/orchestration'
+import { ThreatAnalysis, WorkflowStep, WorkflowConnection, ImplementationPlan, IoC } from '@/types/orchestration'
 import { 
   ZoomIn,
   ZoomOut,
@@ -244,6 +244,16 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
     }
   }
 
+  // Determine final color for a node, factoring in evidence presence
+  const getNodeColor = (node: DiGraphNode) => {
+    // If this is an edge node and evidence was found, highlight in red
+    if (node.type === 'node' && (node.details?.evidenceCount ?? 0) > 0) {
+      return '#ef4444'
+    }
+    return getStatusColor(node.status)
+  }
+
+
   const getNodeSize = (type: DiGraphNode['type'], nodeId?: string) => {
     switch (type) {
       case 'status': return 30 // Main flow nodes (1, 2, 3, 4, 5)
@@ -274,7 +284,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
   return (
     <div className="w-full h-full bg-white border border-gray-200 rounded-xl overflow-hidden flex">
       {/* Main Content */}
-      <div className={`flex-1 transition-all duration-300 ${sidebar.isOpen ? 'mr-96' : ''}`}>
+      <div className={`flex-1 transition-all duration-300 ${sidebar.isOpen ? 'mr-[30rem]' : ''}`}>
         {/* Controls */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-2">
@@ -385,7 +395,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                   y1={implNode.y + getNodeSize('ioc') + 5}
                   x2={childNode.x}
                   y2={childNode.y - getNodeSize('node') - 5}
-                  stroke={getStatusColor(childNode.status)}
+                  stroke={getNodeColor(childNode)}
                   strokeWidth="2"
                   strokeDasharray="5,5"
                   opacity="0.7"
@@ -396,7 +406,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
             {/* Render all nodes as circles */}
             {nodes.map(node => {
               const size = getNodeSize(node.type)
-              const color = getStatusColor(node.status)
+              const color = getNodeColor(node)
               
               return (
                 <g
@@ -461,7 +471,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
       </div>
 
       {/* Retractable Sidebar */}
-      <div className={`absolute top-0 right-0 h-full w-96 bg-gradient-to-br from-slate-50 to-blue-50 border-l border-slate-200 shadow-2xl transform transition-transform duration-300 ease-in-out ${sidebar.isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`absolute top-0 right-0 h-full w-[30rem] bg-gradient-to-br from-slate-50 to-blue-50 border-l border-slate-200 shadow-2xl transform transition-transform duration-300 ease-in-out ${sidebar.isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         {sidebar.node && (
           <div className="h-full flex flex-col">
             {/* Sidebar Header */}
@@ -528,7 +538,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                       <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
                         <Info className="w-4 h-4 text-white" />
                       </div>
-                      <h6 className="font-bold text-slate-900">Implementation Plan Status</h6>
+                      <h6 className="font-bold text-slate-900">Analysis Overview</h6>
                     </div>
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div className="bg-slate-50 rounded-lg p-3">
@@ -577,6 +587,195 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                         </div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Investigation Steps */}
+                {analysis && (analysis as any).workflow?.steps && Array.isArray((analysis as any).workflow.steps) && (analysis as any).workflow.steps.length > 0 && (
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
+                        <div className="w-4 h-4 text-white">📋</div>
+                      </div>
+                      <h6 className="font-bold text-slate-900">Investigation Steps</h6>
+                    </div>
+
+                    {/* Extracted IoCs Summary */}
+                    {(analysis as any).extractedIoCs && (
+                      <div className="mb-6">
+                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className="w-6 h-6 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full flex items-center justify-center">
+                              <div className="w-3 h-3 text-white">🔍</div>
+                            </div>
+                            <div className="font-bold text-blue-900">Extracted Indicators</div>
+                          </div>
+                          <div className="space-y-2">
+                            {(analysis as any).extractedIoCs.patterns && (analysis as any).extractedIoCs.patterns.length > 0 && (
+                              <div>
+                                <div className="text-xs font-semibold text-blue-800 mb-1">PATTERNS</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(analysis as any).extractedIoCs.patterns.map((pattern: string, idx: number) => (
+                                    <span key={idx} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                                      {pattern}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {(analysis as any).extractedIoCs.ips && (analysis as any).extractedIoCs.ips.length > 0 && (
+                              <div>
+                                <div className="text-xs font-semibold text-blue-800 mb-1">IP ADDRESSES</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(analysis as any).extractedIoCs.ips.map((ip: string, idx: number) => (
+                                    <span key={idx} className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded-full font-mono">
+                                      {ip}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {(analysis as any).extractedIoCs.domains && (analysis as any).extractedIoCs.domains.length > 0 && (
+                              <div>
+                                <div className="text-xs font-semibold text-blue-800 mb-1">DOMAINS</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(analysis as any).extractedIoCs.domains.map((domain: string, idx: number) => (
+                                    <span key={idx} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-mono">
+                                      {domain}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {(analysis as any).extractedIoCs.hashes && (analysis as any).extractedIoCs.hashes.length > 0 && (
+                              <div>
+                                <div className="text-xs font-semibold text-blue-800 mb-1">HASHES</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(analysis as any).extractedIoCs.hashes.map((hash: string, idx: number) => (
+                                    <span key={idx} className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded-full font-mono">
+                                      {hash.substring(0, 12)}...
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Investigation Steps */}
+                    <div>
+                      <details className="group">
+                        <summary className="cursor-pointer select-none list-none">
+                          <div className="flex items-center justify-between bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-4 border border-purple-200 hover:from-purple-100 hover:to-pink-100 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className="w-6 h-6 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+                                <div className="w-3 h-3 text-white">🎯</div>
+                              </div>
+                              <div className="font-bold text-purple-900">
+                                Investigation Steps ({(analysis as any).workflow.steps.length})
+                              </div>
+                            </div>
+                            <ChevronRight className="w-5 h-5 text-purple-600 group-open:rotate-90 transition-transform" />
+                          </div>
+                        </summary>
+                        
+                        <div className="mt-4 space-y-3">
+                          {(analysis as any).workflow.steps.map((step: any, index: number) => (
+                            <details key={index} className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden group/item">
+                              <summary className="cursor-pointer select-none list-none p-4 hover:bg-slate-100 transition-colors">
+                                <div className="flex items-start justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                                      step.task_type === 'threat_hunt_ioc' 
+                                        ? 'bg-gradient-to-br from-red-500 to-orange-500' 
+                                        : step.task_type === 'threat_hunt_ttp'
+                                        ? 'bg-gradient-to-br from-amber-500 to-yellow-500'
+                                        : 'bg-gradient-to-br from-blue-500 to-cyan-500'
+                                    }`}>
+                                      <div className="w-4 h-4 text-white font-bold">
+                                        {step.task_type === 'threat_hunt_ioc' ? '🔍' : 
+                                         step.task_type === 'threat_hunt_ttp' ? '⚡' : '🔄'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="font-bold text-slate-900 text-sm">
+                                        {step.name}
+                                      </div>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                                          step.task_type === 'threat_hunt_ioc' 
+                                            ? 'bg-red-100 text-red-800' 
+                                            : step.task_type === 'threat_hunt_ttp'
+                                            ? 'bg-amber-100 text-amber-800'
+                                            : 'bg-blue-100 text-blue-800'
+                                        }`}>
+                                          {step.task_type?.replace('_', ' ').toUpperCase() || 'INVESTIGATION'}
+                                        </span>
+                                        <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                                          step.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                          step.status === 'running' ? 'bg-blue-100 text-blue-800' :
+                                          step.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                          'bg-gray-100 text-gray-800'
+                                        }`}>
+                                          {step.status?.toUpperCase() || 'PENDING'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <ChevronRight className="w-4 h-4 text-slate-400 group-open/item:rotate-90 transition-transform" />
+                                </div>
+                              </summary>
+                              
+                              <div className="px-4 pb-4">
+                                <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+                                  <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-3 flex items-center gap-2">
+                                    <div className="w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
+                                      <div className="w-2 h-2 bg-white rounded-full"></div>
+                                    </div>
+                                    Investigation Instructions
+                                  </div>
+                                  <div className="text-sm text-slate-700 leading-relaxed bg-slate-50 rounded-lg p-3 border-l-4 border-blue-400">
+                                    {step.description}
+                                  </div>
+                                  
+                                  {/* Additional metadata */}
+                                  <div className="mt-3 grid grid-cols-2 gap-3">
+                                    <div className="bg-slate-50 rounded-lg p-2">
+                                      <div className="text-xs font-semibold text-slate-600 mb-1">Task Type</div>
+                                      <div className="text-sm font-medium text-slate-900 capitalize">
+                                        {step.task_type?.replace('_', ' ') || 'Investigation'}
+                                      </div>
+                                    </div>
+                                    <div className="bg-slate-50 rounded-lg p-2">
+                                      <div className="text-xs font-semibold text-slate-600 mb-1">Progress</div>
+                                      <div className="text-sm font-medium text-slate-900">
+                                        {step.progress || 0}%
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Assigned Nodes */}
+                                  {step.assigned_nodes && step.assigned_nodes.length > 0 && (
+                                    <div className="mt-3 bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+                                      <div className="text-xs font-semibold text-indigo-900 mb-2">Assigned Edge Nodes</div>
+                                      <div className="flex flex-wrap gap-1">
+                                        {step.assigned_nodes.map((nodeId: string, idx: number) => (
+                                          <span key={idx} className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full font-mono">
+                                            {nodeId}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 )}
 
@@ -796,24 +995,62 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                                         <span className="text-teal-700 capitalize">{nodeResult.status}</span>
                                       </div>
                                     )}
-                                    {nodeResult.result?.status && (
-                                      <div className="text-xs">
-                                        <span className="font-medium text-teal-800">Result Status: </span>
-                                        <span className="text-teal-700 capitalize">{nodeResult.result.status}</span>
-                                      </div>
-                                    )}
-                                    {nodeResult.evidence && Array.isArray(nodeResult.evidence) && (
-                                      <div className="text-xs">
-                                        <span className="font-medium text-teal-800">Evidence Items: </span>
-                                        <span className="text-teal-700">{nodeResult.evidence.length}</span>
-                                      </div>
-                                    )}
-                                    <div className="bg-white rounded border p-2 mt-2">
-                                      <div className="text-xs font-medium text-teal-900 mb-1">Raw Result Data</div>
-                                      <div className="font-mono text-xs text-teal-800 max-h-24 overflow-y-auto">
+
+                                    {/* Standardized Result Summary */}
+                                    {nodeResult.result && (() => {
+                                      const { raw_terminal_output, evidence, recommendations, ...summary } = nodeResult.result;
+                                      const summaryEntries = Object.entries(summary);
+                                      return (
+                                        <>
+                                          {summaryEntries.map(([key, value]) => (
+                                            <div key={key} className="text-xs capitalize">
+                                              <span className="font-medium text-teal-800">{key.replace(/_/g, ' ')}: </span>
+                                              <span className="text-teal-700">
+                                                {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
+                                              </span>
+                                            </div>
+                                          ))}
+                                          {Array.isArray(evidence) && evidence.length > 0 && (
+                                            <details className="text-xs">
+                                              <summary className="font-medium text-teal-800 cursor-pointer select-none">
+                                                Evidence Items: <span className="text-teal-700">{evidence.length}</span>
+                                              </summary>
+                                              <div className="ml-2 mt-1 space-y-1 max-h-40 overflow-y-auto">
+                                                {evidence.slice(0, 25).map((ev: any, idx: number) => (
+                                                  <div key={idx} className="bg-teal-50 rounded border p-1 font-mono text-[10px] text-teal-800 whitespace-pre-wrap">
+                                                    {typeof ev === 'object' ? JSON.stringify(ev, null, 2) : String(ev)}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </details>
+                                          )}
+                                          {Array.isArray(recommendations) && recommendations.length > 0 && (
+                                            <details className="text-xs">
+                                              <summary className="font-medium text-teal-800 cursor-pointer select-none">
+                                                Recommendations: <span className="text-teal-700">{recommendations.length}</span>
+                                              </summary>
+                                              <div className="ml-2 mt-1 space-y-1 max-h-40 overflow-y-auto list-decimal pl-4">
+                                                {recommendations.slice(0, 25).map((rec: any, idx: number) => (
+                                                  <div key={idx} className="bg-teal-50 rounded border p-1 text-[10px] text-teal-800 whitespace-pre-wrap">
+                                                    {typeof rec === 'object' ? JSON.stringify(rec, null, 2) : String(rec)}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </details>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+
+                                    {/* Collapsible Raw Data for reference */}
+                                    <details className="bg-white rounded border p-2 mt-2">
+                                      <summary className="text-xs font-medium text-teal-900 cursor-pointer select-none">
+                                        Raw Result Data
+                                      </summary>
+                                      <div className="font-mono text-xs text-teal-800 max-h-32 overflow-y-auto mt-1">
                                         {JSON.stringify(nodeResult, null, 2)}
                                       </div>
-                                    </div>
+                                    </details>
                                   </div>
                                 </div>
                               )

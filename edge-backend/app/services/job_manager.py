@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from datetime import datetime
 
 from app.models.job import Job, JobStatus, TaskRequest
-from app.services.simulation_service import SimulationService
+from app.services.analysis_service import AnalysisService
 from app.services.system_monitor import SystemMonitor
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ class JobManager:
     def __init__(self, node_info: Dict):
         self.node_info = node_info
         self.jobs: Dict[str, Job] = {}
-        self.simulation_service = SimulationService(node_info)
+        self.analysis_service = AnalysisService(node_info)
         self.system_monitor = SystemMonitor()
         self.active_tasks: Dict[str, asyncio.Task] = {}
     
@@ -43,7 +43,7 @@ class JobManager:
     async def _execute_job(self, job: Job):
         """Execute a job in the background"""
         try:
-            await self.simulation_service.execute_task(job)
+            await self.analysis_service.execute_task(job)
             logger.info(f"Completed job {job.job_id}")
         except Exception as e:
             logger.error(f"Job {job.job_id} failed: {str(e)}")

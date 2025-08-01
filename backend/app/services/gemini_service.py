@@ -291,3 +291,80 @@ class GeminiService:
             })
         
         return step_templates
+    async def generate_final_report(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate a final threat analysis report using Gemini.
+        """
+        prompt = f"""
+        As a senior cyber security analyst, your task is to synthesize the provided threat intelligence and investigation results into a comprehensive final report.
+
+        **Input Data:**
+
+        1.  **Initial Threat Brief (Blog URL):** {analysis_data.get('blog_url')}
+        2.  **Threat Hypothesis:** {analysis_data.get('implementation_plan', {}).get('hypothesis')}
+        3.  **Key Indicators (IoCs & TTPs):**
+            ```json
+            {json.dumps(analysis_data.get('implementation_plan', {}).get('iocs_and_ttps', []), indent=2)}
+            ```
+        4.  **Investigation Results (Evidence collected from edge nodes):**
+            ```json
+            {json.dumps(analysis_data.get('workflow_steps', []), indent=2)}
+            ```
+
+        **Your Task:**
+
+        Based on all the information provided, generate a final report in a single, valid JSON object with the following structure:
+
+        -   `executive_summary`: A high-level overview for leadership. Include overall threat assessment, risk level (critical, high, medium, low, none), and key findings.
+        -   `technical_details`: A detailed analysis of the evidence. Correlate the initial IoCs/TTPs with the evidence found. Explain the attack lifecycle if possible.
+        -   `affected_systems`: A list of compromised or affected systems, including hostnames and IP addresses.
+        -   `recommendations`: Actionable steps for remediation and prevention. Prioritize these recommendations.
+        -   `confidence_score`: A score from 0 to 100 indicating your confidence in the findings.
+
+        **Example Output Format:**
+
+        ```json
+        {{
+          "executive_summary": "...",
+          "technical_details": "...",
+          "affected_systems": ["..."],
+          "recommendations": ["..."],
+          "confidence_score": 95
+        }}
+        ```
+
+        Now, generate the final report.
+        """
+
+        try:
+            logger.info("Sending request to Gemini API for final report generation")
+            
+            # Use the same client and async execution pattern
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model='gemini-2.5-flash',  # Using the specified model
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        # We expect a JSON response, so we can set the response mime type
+                        response_mime_type="application/json"
+                    )
+                )
+            )
+            
+            logger.info("Received final report from Gemini API")
+
+            if response and response.text:
+                # The response should be a JSON string, so we parse it
+                return json.loads(response.text)
+            else:
+                logger.error("Gemini API returned no content for the final report.")
+                return {"error": "Failed to generate final report from LLM."}
+
+        except Exception as e:
+            logger.error(f"Critical error in Gemini final report generation: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {"error": f"An unexpected error occurred: {str(e)}"}

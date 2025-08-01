@@ -16,7 +16,7 @@ class AnalysisStatus(str, Enum):
     PLANNING = "planning"
     DISTRIBUTING = "distributing"
     SCANNING = "scanning"
-    CORRELATING = "correlating"
+    GENERATING_REPORT = "generating_report"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -32,6 +32,7 @@ class ThreatAnalysis:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    final_report: Optional[Dict[str, Any]] = None
 
 class SimpleStorage:
     """Simple in-memory storage for threat analyses"""
@@ -57,8 +58,18 @@ class SimpleStorage:
         
         analysis = self.analyses[analysis_id]
         for key, value in kwargs.items():
-            if hasattr(analysis, key):
+            has_attr = hasattr(analysis, key)
+            if not has_attr:
+                print(f"WARNING: Analysis object does not have attribute '{key}'. Available attributes: {[attr for attr in dir(analysis) if not attr.startswith('_')]}")
+            if has_attr:
+                # Additional debug logging for final_report
+                if key == 'final_report':
+                    print(f"DEBUG: Setting final_report. Value type: {type(value)}, Value is None: {value is None}")
+                    if value and isinstance(value, dict):
+                        print(f"DEBUG: Final report keys: {list(value.keys())}")
                 setattr(analysis, key, value)
+            else:
+                print(f"ERROR: Skipping update of non-existent attribute '{key}' on analysis {analysis_id}")
         
         analysis.updated_at = datetime.utcnow()
         return True

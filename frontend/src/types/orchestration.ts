@@ -107,6 +107,24 @@ export interface WorkflowConnection {
 }
 
 /**
+ * IoC (Indicator of Compromise) or TTP (Tactics, Techniques, Procedures)
+ */
+export interface IoC {
+  indicator: string
+  type: 'IOC' | 'TTP'
+  search_description: string
+  priority: 'high' | 'medium' | 'low'
+}
+
+/**
+ * Implementation plan returned by AI analysis
+ */
+export interface ImplementationPlan {
+  hypothesis: string
+  iocs_and_ttps: IoC[]
+}
+
+/**
  * Automated threat analysis session
  */
 export interface ThreatAnalysis {
@@ -133,6 +151,7 @@ export interface ThreatAnalysis {
   workflow: {
     steps: WorkflowStep[]
     connections: WorkflowConnection[]
+    implementation_plan?: ImplementationPlan
   }
   
   // Results from all nodes

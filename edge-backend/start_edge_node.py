@@ -32,7 +32,7 @@ def main():
         "node-01": {
             "hostname": "sec-node-01.corp.local",
             "ip": "10.1.100.15",
-            "os_type": "windows",
+            "os_type": "linux",
             "os_version": "Windows Server 2019",
             "location_country": "United States",
             "location_city": "New York"
@@ -48,7 +48,7 @@ def main():
         "node-03": {
             "hostname": "sec-node-03.corp.local",
             "ip": "10.1.100.17",
-            "os_type": "macos",
+            "os_type": "linux",
             "os_version": "macOS 14.1",
             "location_country": "Japan",
             "location_city": "Tokyo"

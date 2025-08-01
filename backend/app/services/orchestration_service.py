@@ -108,16 +108,10 @@ class OrchestrationService:
             await self._update_analysis_status(analysis_id, AnalysisStatus.SCANNING)
             await self._monitor_execution(analysis_id)
             
-            # Step 6: Correlate results
-            await self._update_analysis_status(analysis_id, AnalysisStatus.CORRELATING)
-            await self._correlate_results(analysis_id)
-            
-            # Complete analysis
-            self.storage.update_analysis(
-                analysis_id,
-                status=AnalysisStatus.COMPLETED,
-                completed_at=datetime.utcnow()
-            )
+            # Step 6: Generate Final Report
+            await self._update_analysis_status(analysis_id, AnalysisStatus.GENERATING_REPORT)
+            await self._generate_final_report(analysis_id)
+            # Note: _generate_final_report already sets status to COMPLETED and completed_at
             
             logger.info(f"Completed threat analysis {analysis_id}")
             
@@ -351,44 +345,50 @@ class OrchestrationService:
         if iteration >= max_iterations:
             logger.warning(f"Analysis {analysis_id} monitoring timed out")
     
-    async def _correlate_results(self, analysis_id: str):
-        """Correlate results from all edge nodes"""
+    async def _generate_final_report(self, analysis_id: str):
+        """
+        Generate the final analysis report by synthesizing all data with Gemini.
+        """
+        logger.info(f"Generating final report for analysis {analysis_id}")
         analysis = self.storage.get_analysis(analysis_id)
-        workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps or []]
+        if not analysis:
+            logger.error(f"Analysis {analysis_id} not found, cannot generate final report.")
+            return
+
+        # Prepare the data for the Gemini prompt
+        analysis_data = {
+            "blog_url": analysis.blog_url,
+            "implementation_plan": analysis.implementation_plan,
+            "workflow_steps": analysis.workflow_steps
+        }
+
+        # Call Gemini to generate the report
+        final_report = await self.gemini_service.generate_final_report(analysis_data)
         
-        correlation_step = None
-        total_evidence_count = 0
-        
-        # Find the correlation step
-        for step in workflow_steps:
-            if step.task_type == "evidence_correlation":
-                correlation_step = step
-                break
-        
-        # Count evidence across all completed steps (results are already in step.result)
-        for step in workflow_steps:
-            if step.status == "completed" and step.result:
-                for node_id, result in step.result.items():
-                    if isinstance(result, dict) and "evidence" in result:
-                        evidence_list = result["evidence"]
-                        if isinstance(evidence_list, list):
-                            total_evidence_count += len(evidence_list)
-        
-        # Mark correlation step as completed
-        if correlation_step:
-            correlation_step.status = "completed"
-            correlation_step.progress = 100
-            logger.info(f"Evidence correlation completed for analysis {analysis_id}")
-        
-        # Update workflow steps (results are already stored in step.result)
-        workflow_steps_dict = [step.dict() for step in workflow_steps]
-        
-        # Store updated workflow steps (no need for separate node_results)
-        self.storage.update_analysis(
+        # Debug logging for final report
+        logger.info(f"Generated final report type: {type(final_report)}")
+        logger.info(f"Generated final report is None: {final_report is None}")
+        if final_report:
+            logger.info(f"Final report keys: {list(final_report.keys()) if isinstance(final_report, dict) else 'NOT_DICT'}")
+
+        # Store the final report
+        success = self.storage.update_analysis(
             analysis_id,
-            workflow_steps=workflow_steps_dict
+            final_report=final_report,
+            status=AnalysisStatus.COMPLETED,
+            completed_at=datetime.utcnow()
         )
-        logger.info(f"Correlated results with {total_evidence_count} total evidence items for analysis {analysis_id}")
+        
+        if success:
+            # Verify the final report was stored
+            updated_analysis = self.storage.get_analysis(analysis_id)
+            logger.info(f"After storage - final_report type: {type(updated_analysis.final_report)}")
+            logger.info(f"After storage - final_report is None: {updated_analysis.final_report is None}")
+            if updated_analysis.final_report:
+                logger.info(f"After storage - final_report keys: {list(updated_analysis.final_report.keys()) if isinstance(updated_analysis.final_report, dict) else 'NOT_DICT'}")
+            logger.info(f"Successfully generated and stored final report for analysis {analysis_id}")
+        else:
+            logger.error(f"Failed to store final report for analysis {analysis_id}")
     
     async def _update_analysis_status(self, analysis_id: str, status: AnalysisStatus):
         """Update analysis status in storage"""
@@ -442,7 +442,7 @@ class OrchestrationService:
             "progress": overall_progress,
             "steps": analysis.workflow_steps or [],
             "implementation_plan": analysis.implementation_plan,
-
+            "final_report": analysis.final_report,
             "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
             "error_message": analysis.error_message
         }
@@ -629,7 +629,8 @@ class OrchestrationService:
             # Raw data (for detailed analysis if needed)
             "raw_data": {
                 "steps": analysis.workflow_steps or []
-            }
+            },
+            "final_report": analysis.final_report
         }
     
     def get_analysis_status(self, analysis_id: str) -> Optional[Dict[str, Any]]:
