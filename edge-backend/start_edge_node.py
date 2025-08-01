@@ -77,7 +77,7 @@ def main():
     
     # Start the server
     uvicorn.run(
-        app,
+        "app.main:app",
         host="0.0.0.0",
         port=args.port,
         log_level="info",

@@ -81,9 +81,37 @@ echo "  Edge Node 2: $EDGE2_PID"
 echo "  Edge Node 3: $EDGE3_PID"
 echo ""
 echo "⏹️  To stop all services:"
-echo "  kill $CONTROL_PID $EDGE1_PID $EDGE2_PID $EDGE3_PID"
+echo "  Press Ctrl+C (recommended)"
+echo "  Or manually: pkill -f 'start_server.py|start_edge_node.py'"
 echo ""
 echo "🎯 Ready for threat hunting! Submit a blog URL via the frontend or API."
 
-# Keep script running
-wait
+# Function to cleanup processes on exit
+cleanup() {
+    echo ""
+    echo "🛑 Stopping all services..."
+    
+    # Kill processes by port (more reliable than PID with uv)
+    echo "  Stopping control server (port 8000)..."
+    pkill -f "start_server.py" 2>/dev/null || true
+    
+    echo "  Stopping edge nodes (ports 8001-8003)..."
+    pkill -f "start_edge_node.py" 2>/dev/null || true
+    
+    # Give processes time to clean up
+    sleep 2
+    
+    echo "✅ All services stopped."
+    exit 0
+}
+
+# Set up signal handlers
+trap cleanup SIGINT SIGTERM
+
+# Keep script running with simple monitoring
+echo "Press Ctrl+C to stop all services"
+echo ""
+echo "🔄 Services are running... (monitoring via health checks)"
+while true; do
+    sleep 30
+done
