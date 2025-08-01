@@ -44,10 +44,15 @@ export function ProfessionalDashboard() {
   const [activeTab, setActiveTab] = useState<'overview' | 'fleet' | 'sources' | 'analyses'>('overview')
   const [selectedAnalysis, setSelectedAnalysis] = useState<string | null>(null)
 
+  // Include all analyses except failed ones, prioritize active ones
+  const relevantAnalyses = threatAnalyses.filter(a => a.status !== 'failed')
   const activeAnalyses = threatAnalyses.filter(a => a.status === 'analyzing' || a.status === 'scanning')
+  const completedAnalyses = threatAnalyses.filter(a => a.status === 'completed')
+  
+  // Show selected analysis, or most recent active analysis, or most recent completed analysis
   const displayAnalysis = selectedAnalysis 
     ? threatAnalyses.find(a => a.id === selectedAnalysis) 
-    : activeAnalyses[0]
+    : activeAnalyses[0] || completedAnalyses[0] || relevantAnalyses[0]
 
   const handleCreateDemoAnalysis = async () => {
     try {
@@ -178,22 +183,36 @@ export function ProfessionalDashboard() {
                     <Network className="h-4 w-4 text-blue-600" />
                   </div>
                   <div>
-                    <h2 className="text-xl font-semibold text-text-primary">Live Threat Analysis Workflow</h2>
-                    <p className="text-sm text-text-secondary">Automated threat detection and fleet-wide analysis progress</p>
+                    <h2 className="text-xl font-semibold text-text-primary">Threat Analysis Workflow</h2>
+                    <p className="text-sm text-text-secondary">
+                      {activeAnalyses.length > 0 
+                        ? `${activeAnalyses.length} active analysis${activeAnalyses.length !== 1 ? 'es' : ''} • Real-time progress tracking`
+                        : completedAnalyses.length > 0 
+                          ? `Showing completed analysis • Start new analysis for live tracking`
+                          : 'Automated threat detection and fleet-wide analysis progress'
+                      }
+                    </p>
                   </div>
                 </div>
                 
                 <div className="flex items-center gap-3">
-                  {activeAnalyses.length > 1 && (
+                  {relevantAnalyses.length > 1 && (
                     <select
                       value={selectedAnalysis || ''}
                       onChange={(e) => setSelectedAnalysis(e.target.value || null)}
                       className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Latest Analysis</option>
+                      {/* Show active analyses first */}
                       {activeAnalyses.map((analysis) => (
                         <option key={analysis.id} value={analysis.id}>
-                          {analysis.threatTitle}
+                          🔄 {analysis.threatTitle}
+                        </option>
+                      ))}
+                      {/* Then show completed analyses */}
+                      {completedAnalyses.map((analysis) => (
+                        <option key={analysis.id} value={analysis.id}>
+                          ✅ {analysis.threatTitle}
                         </option>
                       ))}
                     </select>
@@ -217,9 +236,9 @@ export function ProfessionalDashboard() {
               ) : (
                 <div className="bg-white border border-gray-200 rounded-xl p-12 text-center">
                   <Network className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Active Threat Analysis</h3>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Threat Analysis Available</h3>
                   <p className="text-gray-500 mb-6">
-                    Monitoring intelligence sources for new threats. Simulate a threat detection to see the automated analysis workflow.
+                    Start a new threat analysis to see the automated hunting workflow and real-time results.
                   </p>
                   <Button onClick={handleCreateDemoAnalysis} className="flex items-center gap-2 mx-auto">
                     <Plus className="w-4 h-4" />

@@ -25,7 +25,7 @@ export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' 
 /**
  * Threat analysis status
  */
-export type AnalysisStatus = 'monitoring' | 'detected' | 'analyzing' | 'scanning' | 'correlating' | 'completed' | 'failed'
+export type AnalysisStatus = 'monitoring' | 'detected' | 'started' | 'analyzing' | 'extracting_iocs' | 'planning' | 'distributing' | 'scanning' | 'correlating' | 'completed' | 'failed'
 
 /**
  * Threat categories for intelligence classification
