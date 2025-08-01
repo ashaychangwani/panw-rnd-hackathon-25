@@ -1,3 +1,4 @@
+import traceback
 import warnings
 from google import genai
 from google.genai import types
@@ -82,16 +83,9 @@ class GeminiService:
         Based on the content at the URL, generate a concise, actionable hypothesis for a threat hunt.
         Then, extract the most critical and searchable Indicators of Compromise (IOCs) and Tactics, Techniques, and Procedures (TTPs).
 
-        Your final output MUST be a single, valid JSON object with two keys: "hypothesis" and "iocs_and_ttps".
+        Call the extract_threat_intelligence tool with a single, valid JSON object with two keys: "hypothesis" and "iocs_and_ttps".
         The "iocs_and_ttps" value must be a list where each item is a dictionary with "indicator", "type", "search_description", and "priority" keys.
         Rank these iocs_and_ttps indicators by likelihood of being primary signals for this threat. Consider uniqueness and relevance to the described attack.
-
-        Example Output Format:
-        {{
-          "hypothesis": "The environment may be compromised by...",
-          "iocs_and_ttps": [{{"indicator": "....", "type": "TTP", 
-          "search_description": "Look for a ....","priority": "high"}}]
-        }}
 
         Threat Report URL:
         ---
@@ -213,8 +207,8 @@ class GeminiService:
                 )
         except Exception as e:
             logger.error(f"Failed to parse text response: {str(e)}")
+            logger.error(traceback.format_exc())
             logger.error(f"Text response: {text_response}")
-        
         return self._get_fallback_plan("fallback")
     
     def _get_fallback_plan(self, source: str) -> ImplementationPlan:

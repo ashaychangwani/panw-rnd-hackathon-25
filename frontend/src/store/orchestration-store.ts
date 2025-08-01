@@ -611,6 +611,8 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
                           }
                         : analysis.extractedIoCs,
 
+                      // Include final report if available
+                      final_report: analysisData.final_report || analysis.final_report,
                       completedAt: analysisData.status === 'completed' ? new Date() : analysis.completedAt
                     }
                   : analysis

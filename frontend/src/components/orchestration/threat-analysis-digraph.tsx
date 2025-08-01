@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useRef, useState } from 'react'
-import { ThreatAnalysis, WorkflowStep, WorkflowConnection, ImplementationPlan, IoC } from '@/types/orchestration'
+import { ThreatAnalysis, WorkflowStep, WorkflowConnection, ImplementationPlan, IoC, FinalReport } from '@/types/orchestration'
 import { 
   ZoomIn,
   ZoomOut,
@@ -9,7 +9,11 @@ import {
   Info,
   X,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  FileText,
+  AlertTriangle,
+  CheckCircle,
+  Shield
 } from 'lucide-react'
 
 interface ThreatAnalysisDigraphProps {
@@ -496,6 +500,141 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
             {/* Sidebar Content */}
             <div className="flex-1 overflow-y-auto">
               <div className="p-6 space-y-6">
+                {/* Final Report Section - Most Prominent */}
+                {analysis.final_report && analysis.status === 'completed' && (
+                  <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl shadow-lg border-2 border-emerald-200 p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                      <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-full flex items-center justify-center shadow-lg">
+                        <FileText className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-emerald-900 mb-1">Analysis Complete</h3>
+                        <p className="text-emerald-700 font-medium">AI-Generated Final Report</p>
+                      </div>
+                    </div>
+
+                    {/* Executive Summary */}
+                    <div className="bg-white rounded-lg p-4 mb-4 border border-emerald-200 shadow-sm">
+                      <div className="flex items-center gap-3 mb-3">
+                        <FileText className="w-5 h-5 text-emerald-600" />
+                        <h4 className="font-bold text-emerald-900">Executive Summary</h4>
+                      </div>
+                      <div 
+                        className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
+                        dangerouslySetInnerHTML={{
+                          __html: analysis.final_report.executive_summary
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                            .replace(/\n\n/g, '</p><p>')
+                            .replace(/\n/g, '<br/>')
+                            .replace(/^/, '<p>')
+                            .replace(/$/, '</p>')
+                        }}
+                      />
+                    </div>
+
+                    {/* Technical Details */}
+                    {analysis.final_report.technical_details && (
+                      <div className="bg-white rounded-lg p-4 mb-4 border border-emerald-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-3">
+                          <AlertTriangle className="w-5 h-5 text-emerald-600" />
+                          <h4 className="font-bold text-emerald-900">Technical Details</h4>
+                        </div>
+                        <div 
+                          className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
+                          dangerouslySetInnerHTML={{
+                            __html: analysis.final_report.technical_details
+                              .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                              .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                              .replace(/\n\n/g, '</p><p>')
+                              .replace(/\n/g, '<br/>')
+                              .replace(/^/, '<p>')
+                              .replace(/$/, '</p>')
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Affected Systems */}
+                    {analysis.final_report.affected_systems && analysis.final_report.affected_systems.length > 0 && (
+                      <div className="bg-white rounded-lg p-4 mb-4 border border-red-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-3">
+                          <AlertTriangle className="w-5 h-5 text-red-600" />
+                          <h4 className="font-bold text-red-900">Affected Systems</h4>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2">
+                          {analysis.final_report.affected_systems.map((system, index) => (
+                            <div key={index} className="bg-red-50 rounded-lg p-3 border border-red-200">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                                <span className="text-sm font-mono text-red-800">{system}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Recommendations */}
+                    {analysis.final_report.recommendations && analysis.final_report.recommendations.length > 0 && (
+                      <div className="bg-white rounded-lg p-4 mb-4 border border-emerald-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-3">
+                          <CheckCircle className="w-5 h-5 text-emerald-600" />
+                          <h4 className="font-bold text-emerald-900">Recommendations</h4>
+                        </div>
+                        <div className="space-y-3">
+                          {analysis.final_report.recommendations.map((recommendation, index) => (
+                            <div key={index} className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+                              <div 
+                                className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
+                                dangerouslySetInnerHTML={{
+                                  __html: recommendation
+                                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                                    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                                    .replace(/\n\n/g, '</p><p>')
+                                    .replace(/\n/g, '<br/>')
+                                    .replace(/^/, '<p>')
+                                    .replace(/$/, '</p>')
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Confidence Score */}
+                    {analysis.final_report.confidence_score !== undefined && (
+                      <div className="bg-white rounded-lg p-4 border border-emerald-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-3">
+                          <Shield className="w-5 h-5 text-emerald-600" />
+                          <h4 className="font-bold text-emerald-900">Analysis Confidence</h4>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1">
+                            <div className="w-full bg-gray-200 rounded-full h-3">
+                              <div 
+                                className={`h-3 rounded-full transition-all duration-300 ${
+                                  analysis.final_report.confidence_score >= 80 ? 'bg-green-500' :
+                                  analysis.final_report.confidence_score >= 60 ? 'bg-yellow-500' :
+                                  'bg-red-500'
+                                }`}
+                                style={{ width: `${analysis.final_report.confidence_score}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-2xl font-bold text-emerald-800">
+                              {analysis.final_report.confidence_score}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+
+                  </div>
+                )}
                 {/* Node Header Card */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
                   <div className="flex items-start justify-between mb-4">
