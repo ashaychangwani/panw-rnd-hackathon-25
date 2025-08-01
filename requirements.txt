@@ -1,0 +1,9 @@
+jinja2
+fastapi
+uvicorn
+requests
+langchain
+langchain-community
+networkx
+matplotlib
+langchain-google-genai

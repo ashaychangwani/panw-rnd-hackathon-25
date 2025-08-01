@@ -1,0 +1,115 @@
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Threat Hunt Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #222;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            font-size: 14px;
+        }
+        th {
+            background: #e9ecef;
+        }
+        details {
+            margin-bottom: 10px;
+        }
+        summary {
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 5px;
+        }
+        .section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #fff;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        img {
+            border: 1px solid #ccc;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Threat Hunt Report</h1>
+    <p><b>Start Time:</b> {{start_time}} <br>
+       <b>End Time:</b> {{end_time}}</p>
+
+    <div class="section">
+        <h2>Initial IOCs</h2>
+        <ul>
+        {% for ioc in initial_iocs %}
+            <li>{{ioc}}</li>
+        {% endfor %}
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Final Affected Assets</h2>
+        <pre>{{assets | tojson(indent=2)}}</pre>
+    </div>
+
+    <div class="section">
+        <h2>MITRE ATT&CK Mapping</h2>
+        <table>
+            <tr><th>Event</th><th>Tactic</th><th>Technique</th></tr>
+            {% for m in mitre %}
+            <tr><td>{{m.event}}</td><td>{{m.tactic}}</td><td>{{m.technique}}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    {% if timeline %}
+    <div class="section">
+        <h2>Attack Timeline</h2>
+        <table>
+            <tr><th>Timestamp</th><th>Event</th></tr>
+            {% for ev in timeline %}
+            <tr><td>{{ev.timestamp}}</td><td>{{ev.event}}</td></tr>
+            {% endfor %}
+        </table>
+        <img src="{{img_path}}" width="600">
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <h2>Hunting Iterations</h2>
+        {% for it in iterations %}
+        <div style="margin-bottom: 20px;">
+            <h3>Iteration {{it.round}}</h3>
+            <p><b>Searched IOCs:</b> {{it.searched_iocs}}</p>
+            <p><b>Candidate Pivots:</b> {{it.candidate_pivots}}</p>
+            <p><b>Selected Pivots:</b> {{it.selected_pivots}}</p>
+            <details>
+                <summary>Events Found ({{it.events | length}})</summary>
+                <pre>{{it.events | tojson(indent=2)}}</pre>
+            </details>
+        </div>
+        {% endfor %}
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,65 @@
+{
+  "hypothesis": "Unpatched Apache Log4j 2 instances (CVE-2021-44228, CVE-2021-45046, CVE-2021-45105, CVE-2021-44832) within our environment may have been exploited, resulting in remote code execution and the deployment of post-exploitation tools such as information stealers, CobaltStrike beacons, or coinminers.",
+  "iocs_and_ttps": [
+    {
+      "indicator": "JNDI Lookup Strings in HTTP Requests",
+      "type": "TTP",
+      "search_description": "Look for HTTP requests (GET/POST) containing JNDI lookup patterns like '${jndi:ldap://', '${jndi:rmi://', or similar, especially in URL paths, User-Agent, Referer, X-Api-Version, Accept-Language, or Cookie headers. Also search for base64 encoded strings that decode to such patterns.",
+      "priority": "high"
+    },
+    {
+      "indicator": "Outbound LDAP/RMI Connections",
+      "type": "TTP",
+      "search_description": "Monitor for outbound LDAP (TCP/389, 636) or RMI (TCP/1099) connections originating from internal servers, particularly those running Java applications, to external or unusual internal IP addresses.",
+      "priority": "high"
+    },
+    {
+      "indicator": "Malicious Callback/C2 Domains & IPs",
+      "type": "IOC",
+      "search_description": "Look for outbound network connections (HTTP/S, LDAP, RMI, raw sockets) to the following known malicious domains and IP addresses: 1ma[.]xyz (and subdomains like *.pef.mur.1ma.xyz, spif.mur.1ma.xyz), 139.155.2[.]105, 192.46.216[.]224, 161.35.184[.]54, 165.22.2[.]186, 150.60.139[.]51, 68.183.165[.]105, 2.57.121[.]36, 45.83.64[.]1, 195.54.160[.]149, 45.83.193[.]150, 64.39.98[.]200, 193.3.19[.]159, 5.101.118[.]127, 31.131.16[.]127, 45.66.8[.]12, 185.246.87[.]50.",
+      "priority": "high"
+    },
+    {
+      "indicator": "Download and Execution of Remote Java Classes",
+      "type": "TTP",
+      "search_description": "Monitor for Java processes attempting to download and load '.class' files from remote HTTP/S servers (e.g., Rjava.class, V8.class, EvilObj.class, Exploit.class).",
+      "priority": "high"
+    },
+    {
+      "indicator": "Post-Exploitation Command Execution",
+      "type": "TTP",
+      "search_description": "Look for unusual process creation or command execution on Java application servers, including PowerShell commands downloading files from external URLs, 'curl.exe' or 'wget.exe' used for data exfiltration or payload download, and suspicious 'Java.lang.Runtime.exec' calls.",
+      "priority": "high"
+    },
+    {
+      "indicator": "CobaltStrike Beacon Activity",
+      "type": "TTP",
+      "search_description": "Search for outbound network connections to 139.155.2[.]105:4433, which is a known CobaltStrike C2 server, or other common CobaltStrike C2 patterns.",
+      "priority": "medium"
+    },
+    {
+      "indicator": "Data Exfiltration Attempts (V8 Stealer)",
+      "type": "TTP",
+      "search_description": "Look for outbound HTTP POST requests to '1ma[.]xyz' subdomains containing sensitive data (e.g., '/etc/passwd' content, environment variables) or DNS queries to '*.spif.mur.1ma.xyz' indicative of DNS tunneling.",
+      "priority": "medium"
+    },
+    {
+      "indicator": "XMRig Coinminer Artifacts",
+      "type": "IOC",
+      "search_description": "Search for the presence or execution of 'xmrig64.exe' or network connections related to the Monero wallet address '46QBumovWy4dLJ4R8wq8JwhHKWMhCaDyNDEzvxHFmAHn92EyKrttq6LfV6if5UYDAyCzh3egWXMhnfJJrEhWkMzqTPzGzsE'.",
+      "priority": "medium"
+    },
+    {
+      "indicator": "Internal Log4j Scanning Activity",
+      "type": "TTP",
+      "search_description": "Identify internal systems initiating Log4j exploitation attempts (JNDI lookups) against other internal systems, particularly targeting RFC1918 IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).",
+      "priority": "medium"
+    },
+    {
+      "indicator": "Vulnerable Log4j Versions",
+      "type": "TTP",
+      "search_description": "Identify systems running Apache Log4j 2.x versions <= 2.15.0-rc1 (for CVE-2021-44228), <= 2.16.0 (for CVE-2021-45046, CVE-2021-45105), or <= 2.17.0 (for CVE-2021-44832). This is a pre-exploitation indicator for asset identification.",
+      "priority": "low"
+    }
+  ]
+}
