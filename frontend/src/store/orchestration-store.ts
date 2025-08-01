@@ -10,7 +10,8 @@ import {
   AnalysisStatus,
   ExecutionNode,
   ThreatCampaign,
-  ThreatCategory
+  ThreatCategory,
+  NodeCapability
 } from '@/types/orchestration'
 import { generateId } from '@/lib/utils'
 import { apiClient, getErrorMessage, EdgeNodeInfo } from '@/lib/api-client'
@@ -52,6 +53,9 @@ interface OrchestrationStore {
   addIntelligenceSource: (url: string, title: string, description: string, categories?: ThreatCategory[]) => void
   removeIntelligenceSource: (sourceId: string) => void
   toggleIntelligenceSource: (sourceId: string) => void
+  
+  // Helper functions
+  updateAnalysisFromApiStatus: (analysisId: string, apiStatus: any) => void
   simulateNewThreat: (sourceId: string) => Promise<void>
   
   // System Operations
@@ -331,7 +335,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
               id: generateId(),
               name: 'Blog Analysis',
               description: 'Analyzing threat intelligence from blog source',
-              type: 'blog-analysis',
+              type: 'blog-detection',
               status: 'running',
               progress: 0,
               allNodes: false,
@@ -341,7 +345,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
           ],
           connections: []
         },
-
+        nodeResults: {},
         overallThreatLevel: 'none',
         compromisedNodes: [],
         mitigationActions: [],
@@ -385,7 +389,7 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
         threatCategories: ['general'] as ThreatCategory[],
         extractedIoCs: { ips: [], domains: [], hashes: [], patterns: [] },
         workflow: { steps: [], connections: [] },
-
+        nodeResults: {},
         overallThreatLevel: 'none',
         compromisedNodes: [],
         mitigationActions: [],
@@ -553,6 +557,20 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
     get().unsubscribeFromAnalysis(analysisId)
   },
 
+  updateAnalysisFromApiStatus: (analysisId: string, apiStatus: any) => {
+    set(state => ({
+      threatAnalyses: state.threatAnalyses.map(analysis =>
+        analysis.id === analysisId
+          ? {
+              ...analysis,
+              status: apiStatus.status === 'running' ? 'analyzing' : apiStatus.status,
+              completedAt: apiStatus.status === 'completed' ? new Date() : analysis.completedAt
+            }
+          : analysis
+      )
+    }))
+  },
+
   subscribeToAnalysis: (analysisId: string) => {
     // Don't create duplicate connections
     if (get().activeConnections.has(analysisId)) {
@@ -617,6 +635,26 @@ export const useOrchestrationStore = create<OrchestrationStore>((set, get) => ({
       ws.onclose = () => {
         console.log(`WebSocket closed for analysis ${analysisId}`)
         get().activeConnections.delete(analysisId)
+        
+        // Make a final API call to ensure we have the latest status
+        setTimeout(async () => {
+          try {
+            console.log(`Making final status check for analysis ${analysisId}`)
+            const finalStatus = await apiClient.getAnalysisStatus(analysisId)
+            
+            // Use helper function to update analysis
+            get().updateAnalysisFromApiStatus(analysisId, finalStatus)
+            
+            // Complete analysis if the final status shows it's done
+            if (finalStatus.status === 'completed' || finalStatus.status === 'failed') {
+              get().completeAnalysis(analysisId, finalStatus.status === 'completed')
+            }
+            
+            console.log(`Final status check completed for analysis ${analysisId}: ${finalStatus.status}`)
+          } catch (error) {
+            console.error(`Failed to get final status for analysis ${analysisId}:`, error)
+          }
+        }, 100) // Small delay to ensure cleanup happens first
       }
       
       // Store the connection
