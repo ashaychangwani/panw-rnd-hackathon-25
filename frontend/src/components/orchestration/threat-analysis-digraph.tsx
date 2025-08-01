@@ -222,10 +222,10 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                 className="cursor-pointer"
                 onClick={() => handleStepClick(step)}
               >
-                {/* Step background */}
+                {/* Step background - Make it taller to show more info */}
                 <rect
-                  width="220"
-                  height="120"
+                  width="280"
+                  height="140"
                   rx="12"
                   fill="white"
                   stroke={isSelected ? '#3b82f6' : '#e5e7eb'}
@@ -235,7 +235,7 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                 
                 {/* Status indicator bar */}
                 <rect
-                  width="220"
+                  width="280"
                   height="6"
                   rx="3"
                   fill={statusColor}
@@ -245,8 +245,8 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                 {step.status === 'running' && (
                   <rect
                     x="12"
-                    y="100"
-                    width={Math.max(0, (step.progress / 100) * 196)}
+                    y="120"
+                    width={Math.max(0, (step.progress / 100) * 256)}
                     height="6"
                     rx="3"
                     fill="#3b82f6"
@@ -279,24 +279,46 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                     {step.name}
                   </text>
                   
-                  {/* Step description */}
+                  {/* Step description - Enhanced with more details */}
                   <text
                     x="0"
                     y="68"
                     className="text-xs"
                     fill="#6b7280"
                   >
-                    {step.description.length > 30 
-                      ? `${step.description.substring(0, 30)}...` 
+                    {step.description.length > 35 
+                      ? `${step.description.substring(0, 35)}...` 
                       : step.description
                     }
                   </text>
+
+                  {/* Task type and priority indicator */}
+                  <text
+                    x="0"
+                    y="82"
+                    className="text-xs font-mono"
+                    fill="#059669"
+                  >
+                    {step.type?.replace(/_/g, ' ').toUpperCase()}
+                  </text>
+                  
+                  {/* Node assignment info */}
+                  {step.affectedNodes && step.affectedNodes.length > 0 && (
+                    <text
+                      x="0"
+                      y="96"
+                      className="text-xs"
+                      fill="#7c3aed"
+                    >
+                      Nodes: {step.affectedNodes.length} assigned
+                    </text>
+                  )}
                   
                   {/* Progress text for running steps */}
                   {step.status === 'running' && (
                     <text
                       x="0"
-                      y="85"
+                      y="108"
                       className="text-xs font-medium"
                       fill="#3b82f6"
                     >
@@ -304,11 +326,23 @@ export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisD
                     </text>
                   )}
                   
+                  {/* Results summary for completed steps */}
+                  {step.status === 'completed' && step.results && (
+                    <text
+                      x="0"
+                      y="108"
+                      className="text-xs font-medium"
+                      fill="#059669"
+                    >
+                      ✓ Evidence found: {step.results.findings_count || 0}
+                    </text>
+                  )}
+                  
                   {/* All nodes indicator */}
                   {step.allNodes && (
                     <text
-                      x="140"
-                      y="85"
+                      x="180"
+                      y="96"
                       className="text-xs"
                       fill="#9ca3af"
                     >

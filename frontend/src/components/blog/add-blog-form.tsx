@@ -17,13 +17,39 @@ export function AddBlogForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!url.trim() || !title.trim()) return
+    if (!url.trim()) return
 
     setIsLoading(true)
     try {
-      addBlog(url.trim(), title.trim(), description.trim())
+      // Call the new backend API for threat analysis
+      const response = await fetch('http://localhost:8000/api/v1/threat-analysis/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          blog_url: url.trim()
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const result = await response.json()
+      
+      // Start threat analysis with the returned analysis ID
+      addBlog(url.trim(), title.trim() || `Analysis ${result.analysis_id}`, description.trim())
       
       // Reset form
+      setUrl('')
+      setTitle('')
+      setDescription('')
+      setIsOpen(false)
+    } catch (error) {
+      console.error('Error starting threat analysis:', error)
+      // Still add to the UI for demo purposes, but show it failed
+      addBlog(url.trim(), title.trim() || 'Analysis (Failed)', description.trim())
       setUrl('')
       setTitle('')
       setDescription('')
@@ -72,7 +98,7 @@ export function AddBlogForm() {
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://example.com/security-blog"
+              placeholder="https://unit42.paloaltonetworks.com/apache-log4j-vulnerability-cve-2021-44228/"
               className="w-full px-3 py-2 border border-input rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
               required
             />
@@ -80,16 +106,15 @@ export function AddBlogForm() {
 
           <div className="space-y-2">
             <label htmlFor="blog-title" className="text-sm font-medium">
-              Blog Title *
+              Title (Optional)
             </label>
             <input
               id="blog-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Security Blog Name"
+              placeholder="Auto-generated from blog content"
               className="w-full px-3 py-2 border border-input rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-              required
             />
           </div>
 

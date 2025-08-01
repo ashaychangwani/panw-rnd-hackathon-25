@@ -1,0 +1,11 @@
+# uv configuration for the project
+# This ensures consistent Python and package management across the workspace
+
+# Use Python 3.9+ for best compatibility
+python-version = "3.9"
+
+# Enable virtual environment creation in each directory
+create-venv = true
+
+# Use the system Python when available
+system-site-packages = false
