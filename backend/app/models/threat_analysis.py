@@ -1,38 +1,8 @@
-from sqlalchemy import Column, String, DateTime, Text, Integer, JSON, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import func
-from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
-from enum import Enum
 
-Base = declarative_base()
-
-class AnalysisStatus(str, Enum):
-    STARTED = "started"
-    ANALYZING = "analyzing"
-    EXTRACTING_IOCS = "extracting_iocs"
-    PLANNING = "planning"
-    DISTRIBUTING = "distributing"
-    SCANNING = "scanning"
-    CORRELATING = "correlating"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-class ThreatAnalysisDB(Base):
-    __tablename__ = "threat_analyses"
-    
-    id = Column(String, primary_key=True)
-    blog_url = Column(String, nullable=False)
-    blog_content = Column(Text)
-    status = Column(String, default=AnalysisStatus.STARTED)
-    implementation_plan = Column(JSON)
-    workflow_steps = Column(JSON)
-    node_results = Column(JSON)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    completed_at = Column(DateTime)
-    error_message = Column(Text)
+# Import AnalysisStatus from database module where it's now defined
+from app.core.database import AnalysisStatus
 
 # Pydantic Models for API
 class IoC(BaseModel):

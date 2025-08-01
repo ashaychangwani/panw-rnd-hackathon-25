@@ -3,20 +3,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ThreatAnalysis, WorkflowStep, WorkflowConnection } from '@/types/orchestration'
 import { 
-  FileText,
-  Search,
-  Zap,
-  MonitorSpeaker,
-  Network,
-  ShieldCheck,
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  AlertTriangle,
   ZoomIn,
   ZoomOut,
   RotateCcw,
-  Loader
+  Info,
+  X
 } from 'lucide-react'
 
 interface ThreatAnalysisDigraphProps {
@@ -24,50 +15,149 @@ interface ThreatAnalysisDigraphProps {
   onStepClick?: (step: WorkflowStep) => void
 }
 
-interface StepPosition {
+interface DiGraphNode {
+  id: string
+  type: 'status' | 'ioc' | 'node'
+  label: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
   x: number
   y: number
+  parentId?: string
+  details?: any
+}
+
+interface Tooltip {
+  x: number
+  y: number
+  node: DiGraphNode
 }
 
 export function ThreatAnalysisDigraph({ analysis, onStepClick }: ThreatAnalysisDigraphProps) {
   const svgRef = useRef<SVGSVGElement>(null)
-  const [stepPositions, setStepPositions] = useState<Record<string, StepPosition>>({})
+  const [nodes, setNodes] = useState<DiGraphNode[]>([])
   const [zoom, setZoom] = useState(0.8)
   const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [selectedStep, setSelectedStep] = useState<string | null>(null)
+  const [tooltip, setTooltip] = useState<Tooltip | null>(null)
 
-  // Create fixed horizontal workflow layout
+  // Create hierarchical digraph layout based on backend analysis status
   useEffect(() => {
-    const steps = analysis.workflow.steps
-    const positions: Record<string, StepPosition> = {}
+    const generatedNodes: DiGraphNode[] = []
+    let currentY = 80
+    const nodeSpacing = 120
+    const iocSpacing = 160
+    const childOffset = 200
     
-    // Define workflow order
-    const workflowOrder = [
-      'blog-detection',
-      'ioc-extraction', 
-      'fleet-deployment',
-      'node-scanning',
-      'evidence-correlation',
-      'mitigation'
-    ]
-    
-    const stepWidth = 220
-    const stepSpacing = 100
-    const startX = 50
-    const centerY = 200
-    
-    steps.forEach((step, index) => {
-      const orderIndex = workflowOrder.indexOf(step.type)
-      const xPos = startX + (orderIndex >= 0 ? orderIndex : index) * (stepWidth + stepSpacing)
-      
-      positions[step.id] = {
-        x: xPos,
-        y: centerY
+    // Map backend status to our display status
+    const mapStatus = (backendStatus: string) => {
+      switch (backendStatus) {
+        case 'started':
+        case 'analyzing':
+        case 'extracting_iocs':
+        case 'planning':
+        case 'distributing':
+          return 'running' as const
+        case 'scanning':
+        case 'correlating':
+          return 'running' as const
+        case 'completed':
+          return 'completed' as const
+        case 'failed':
+          return 'failed' as const
+        default:
+          return 'pending' as const
       }
+    }
+
+    // 1. Status Flow Nodes - Master flow representing backend analysis phases
+    const statusPhases = [
+      { id: 'extracting', label: 'Extracting IoCs', status: 'extracting_iocs' },
+      { id: 'planning', label: 'Planning Hunt', status: 'planning' },
+      { id: 'distributing', label: 'Distributing Tasks', status: 'distributing' },
+      { id: 'scanning', label: 'Scanning Nodes', status: 'scanning' },
+      { id: 'correlating', label: 'Correlating Results', status: 'correlating' },
+      { id: 'completed', label: 'Analysis Complete', status: 'completed' }
+    ]
+
+    statusPhases.forEach((phase, index) => {
+      const isCurrentOrPast = analysis.status === phase.status || 
+        statusPhases.findIndex(p => p.status === analysis.status) > index
+      
+      generatedNodes.push({
+        id: phase.id,
+        type: 'status',
+        label: phase.label,
+        status: isCurrentOrPast ? mapStatus(phase.status) : 'pending',
+        x: 100 + index * iocSpacing,
+        y: currentY,
+        details: {
+          phase: phase.status,
+          analysisStatus: analysis.status,
+          startedAt: analysis.startedAt,
+          completedAt: analysis.completedAt
+        }
+      })
     })
-    
-    setStepPositions(positions)
-  }, [analysis.workflow])
+
+    currentY += 120
+
+    // 2. IoC/TTP Nodes - One for each extracted indicator
+    if (analysis.extractedIoCs) {
+      const allIocs = [
+        ...analysis.extractedIoCs.ips.map(ip => ({ indicator: ip, type: 'IP' })),
+        ...analysis.extractedIoCs.domains.map(domain => ({ indicator: domain, type: 'Domain' })),
+        ...analysis.extractedIoCs.hashes.map(hash => ({ indicator: hash, type: 'Hash' })),
+        ...analysis.extractedIoCs.patterns.map(pattern => ({ indicator: pattern, type: 'TTP' }))
+      ]
+
+      allIocs.forEach((ioc, index) => {
+        const iocStatus = analysis.status === 'scanning' || analysis.status === 'correlating' || analysis.status === 'completed' 
+          ? 'running' : 'pending'
+        
+        generatedNodes.push({
+          id: `ioc-${index}`,
+          type: 'ioc',
+          label: ioc.indicator.length > 20 ? `${ioc.indicator.substring(0, 20)}...` : ioc.indicator,
+          status: iocStatus,
+          x: 100 + index * iocSpacing,
+          y: currentY,
+          details: {
+            fullIndicator: ioc.indicator,
+            type: ioc.type,
+            description: `Searching for ${ioc.type}: ${ioc.indicator}`,
+            priority: 'medium' // Could be enhanced with actual priority from backend
+          }
+        })
+
+        // 3. Edge Node Children - Under each IoC
+        if (analysis.nodeResults && Object.keys(analysis.nodeResults).length > 0) {
+          Object.entries(analysis.nodeResults).forEach(([ nodeId, nodeResult ], nodeIndex) => {
+            const nodeStatus = nodeResult.status === 'completed' ? 'completed' : 
+                              nodeResult.status === 'failed' ? 'failed' :
+                              nodeResult.status === 'scanning' ? 'running' : 'pending'
+            
+            generatedNodes.push({
+              id: `node-${index}-${nodeIndex}`,
+              type: 'node',
+              label: nodeId,
+              status: nodeStatus,
+              x: 100 + index * iocSpacing,
+              y: currentY + 80 + nodeIndex * 60,
+              parentId: `ioc-${index}`,
+              details: {
+                nodeId,
+                status: nodeResult.status,
+                evidenceCount: nodeResult.evidence?.length || 0,
+                lastUpdated: nodeResult.lastUpdated,
+                findings: nodeResult.evidence || []
+              }
+            })
+          })
+        }
+      })
+    }
+
+    setNodes(generatedNodes)
+  }, [analysis])
 
   const getStepStatusColor = (status: WorkflowStep['status']) => {
     switch (status) {

@@ -95,6 +95,38 @@ class JobManager:
             del self.jobs[job_id]
             logger.info(f"Cleaned up old job {job_id}")
     
+    def get_node_info(self) -> Dict:
+        """Get current node information and statistics"""
+        active_jobs = self.get_active_jobs()
+        completed_jobs = {
+            job_id: job for job_id, job in self.jobs.items()
+            if job.status == JobStatus.COMPLETED
+        }
+        failed_jobs = {
+            job_id: job for job_id, job in self.jobs.items()
+            if job.status == JobStatus.FAILED
+        }
+        
+        return {
+            "node_info": self.node_info,
+            "job_statistics": {
+                "total_jobs": len(self.jobs),
+                "active_jobs": len(active_jobs),
+                "completed_jobs": len(completed_jobs),
+                "failed_jobs": len(failed_jobs)
+            },
+            "active_job_details": [
+                {
+                    "job_id": job.job_id,
+                    "task_type": job.task_type,
+                    "status": job.status,
+                    "progress": job.progress,
+                    "started_at": job.started_at
+                }
+                for job in active_jobs.values()
+            ]
+        }
+    
     async def shutdown(self):
         """Gracefully shutdown the job manager"""
         logger.info("Shutting down job manager...")

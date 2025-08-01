@@ -4,37 +4,30 @@ import uuid
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from sqlalchemy.orm import Session
 
-from app.models.threat_analysis import (
-    ThreatAnalysisDB, AnalysisStatus, ImplementationPlan, WorkflowStep
-)
+from app.core.database import SimpleStorage, ThreatAnalysis, AnalysisStatus
+from app.models.threat_analysis import ImplementationPlan, WorkflowStep
 from app.services.gemini_service import GeminiService
-from app.services.blog_service import BlogService
 from app.services.edge_node_service import EdgeNodeService
 
 logger = logging.getLogger(__name__)
 
 class OrchestrationService:
-    def __init__(self, db: Session):
-        self.db = db
+    _cleanup_task: Optional[asyncio.Task] = None
+    
+    def __init__(self, storage: SimpleStorage, enable_cleanup: bool = True):
+        self.storage = storage
         self.gemini_service = GeminiService()
-        self.blog_service = BlogService()
         self.edge_service = EdgeNodeService()
         self.active_analyses: Dict[str, asyncio.Task] = {}
+        
+        if enable_cleanup:
+            self._setup_cleanup_task()
     
     async def start_threat_analysis(self, blog_url: str) -> str:
         """Start a new threat analysis workflow"""
-        analysis_id = str(uuid.uuid4())
-        
-        # Create database record
-        analysis = ThreatAnalysisDB(
-            id=analysis_id,
-            blog_url=blog_url,
-            status=AnalysisStatus.STARTED
-        )
-        self.db.add(analysis)
-        self.db.commit()
+        # Create analysis record
+        analysis_id = self.storage.create_analysis(blog_url)
         
         # Start background processing
         task = asyncio.create_task(self._process_threat_analysis(analysis_id))
@@ -46,28 +39,17 @@ class OrchestrationService:
     async def _process_threat_analysis(self, analysis_id: str):
         """Main workflow processing logic"""
         try:
-            analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
+            analysis = self.storage.get_analysis(analysis_id)
             if not analysis:
                 logger.error(f"Analysis {analysis_id} not found")
                 return
             
-            # Step 1: Fetch blog content
+            # Step 1: Extract IoCs using Gemini (directly from URL)
             await self._update_analysis_status(analysis_id, AnalysisStatus.ANALYZING)
-            blog_content = await self.blog_service.fetch_blog_content(analysis.blog_url)
-            
-            if not blog_content:
-                await self._fail_analysis(analysis_id, "Failed to fetch blog content")
-                return
-            
-            # Update with blog content
-            analysis.blog_content = blog_content
-            self.db.commit()
-            
-            # Step 2: Extract IoCs using Gemini
             await self._update_analysis_status(analysis_id, AnalysisStatus.EXTRACTING_IOCS)
-            logger.info(f"Starting LLM analysis for blog content (length: {len(blog_content)} chars)")
+            logger.info(f"Starting LLM analysis for blog URL: {analysis.blog_url}")
             
-            implementation_plan = self.gemini_service.analyze_threat_blog(blog_content)
+            implementation_plan = await self.gemini_service.analyze_threat_blog(analysis.blog_url)
             
             # Validate that the implementation plan was properly generated
             if not implementation_plan:
@@ -89,24 +71,38 @@ class OrchestrationService:
             logger.info(f"Implementation Plan: IoCs/TTPs {implementation_plan.iocs_and_ttps}")
             
             
-            # Update database with plan and steps
+            # Update storage with plan and steps
             plan_dict = implementation_plan.model_dump() if hasattr(implementation_plan, 'model_dump') else implementation_plan.dict()
             workflow_steps_dict = [step.model_dump() if hasattr(step, 'model_dump') else step.dict() for step in workflow_steps]
             
-            analysis.implementation_plan = plan_dict
-            analysis.workflow_steps = workflow_steps_dict
-            self.db.commit()
+            logger.info(f"About to save plan_dict type: {type(plan_dict)}, keys: {list(plan_dict.keys()) if isinstance(plan_dict, dict) else 'NOT_DICT'}")
+            logger.info(f"Plan dict size: {len(str(plan_dict))} characters")
             
-            # Simple verification
-            if not analysis.implementation_plan:
-                await self._fail_analysis(analysis_id, "Implementation plan failed to save to database")
+            # Update the analysis with the implementation plan and workflow steps
+            success = self.storage.update_analysis(
+                analysis_id,
+                implementation_plan=plan_dict,
+                workflow_steps=workflow_steps_dict
+            )
+            
+            if not success:
+                await self._fail_analysis(analysis_id, "Failed to update analysis in storage")
+                return
+            
+            # Verify the update
+            updated_analysis = self.storage.get_analysis(analysis_id)
+            logger.info(f"After update - implementation_plan type: {type(updated_analysis.implementation_plan)}")
+            logger.info(f"After update - implementation_plan is None: {updated_analysis.implementation_plan is None}")
+            
+            if not updated_analysis.implementation_plan:
+                await self._fail_analysis(analysis_id, "Implementation plan failed to save to storage")
                 return
             
             logger.info(f"Implementation plan saved with {len(plan_dict.get('iocs_and_ttps', []))} IoCs/TTPs")
             
             # Step 4: Distribute tasks to edge nodes
             await self._update_analysis_status(analysis_id, AnalysisStatus.DISTRIBUTING)
-            await self._distribute_tasks(analysis_id, workflow_steps)
+            await self._distribute_tasks(analysis_id, workflow_steps, implementation_plan)
             
             # Step 5: Monitor and coordinate execution
             await self._update_analysis_status(analysis_id, AnalysisStatus.SCANNING)
@@ -117,9 +113,11 @@ class OrchestrationService:
             await self._correlate_results(analysis_id)
             
             # Complete analysis
-            analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.utcnow()
-            self.db.commit()
+            self.storage.update_analysis(
+                analysis_id,
+                status=AnalysisStatus.COMPLETED,
+                completed_at=datetime.utcnow()
+            )
             
             logger.info(f"Completed threat analysis {analysis_id}")
             
@@ -171,7 +169,7 @@ class OrchestrationService:
         
         return steps
     
-    async def _distribute_tasks(self, analysis_id: str, workflow_steps: List[WorkflowStep]):
+    async def _distribute_tasks(self, analysis_id: str, workflow_steps: List[WorkflowStep], implementation_plan: ImplementationPlan):
         """Distribute tasks to edge nodes"""
         # Discover available nodes
         available_nodes = await self.edge_service.discover_nodes()
@@ -184,50 +182,52 @@ class OrchestrationService:
         # Distribute investigation tasks to all nodes
         for step in workflow_steps:
             if step.task_type.startswith("threat_hunt_"):
-                # Get the indicator details from the implementation plan
-                analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-                plan_data = analysis.implementation_plan
+                # Use the passed implementation plan directly instead of querying database
+                logger.info(f"Processing step {step.name} with implementation plan (type: {type(implementation_plan)})")
                 
-                # Validate that plan_data exists and is properly structured
-                if not plan_data:
-                    logger.error(f"Implementation plan is None for analysis {analysis_id} - cannot distribute task for step {step.name} {plan_data}")
+                if not implementation_plan:
+                    logger.error(f"Implementation plan is None for analysis {analysis_id} - cannot distribute task for step {step.name}")
                     continue
                 
-                if not isinstance(plan_data, dict):
-                    logger.error(f"Implementation plan is not a dictionary for analysis {analysis_id}: {type(plan_data)}")
-                    continue
+                iocs_list = implementation_plan.iocs_and_ttps
+                logger.info(f"Using implementation plan with {len(iocs_list)} IoCs/TTPs for step: {step.name}")
+                logger.info(f"IoCs list type: {type(iocs_list)}")
                 
-                if "iocs_and_ttps" not in plan_data:
-                    logger.error(f"Implementation plan missing 'iocs_and_ttps' key for analysis {analysis_id}: {list(plan_data.keys())}")
-                    continue
-                
-                logger.info(f"Retrieved implementation plan with {len(plan_data.get('iocs_and_ttps', []))} IoCs/TTPs for step: {step.name}")
+                # Log all available IoCs for debugging
+                for i, ioc in enumerate(iocs_list):
+                    logger.info(f"IoC {i}: indicator='{ioc.indicator}', type='{ioc.type}', priority='{ioc.priority}'")
                 
                 # Find the corresponding IoC
                 indicator_data = None
-                iocs_list = plan_data.get("iocs_and_ttps", [])
-                logger.debug(f"Searching for indicator matching step name '{step.name}' in {len(iocs_list)} IoCs")
+                logger.info(f"Searching for indicator matching step name '{step.name}' in {len(iocs_list)} IoCs")
                 
-                for ioc in iocs_list:
-                    logger.debug(f"Checking IoC: {ioc.get('indicator', 'NO_INDICATOR')} against step name ending")
-                    if step.name.endswith(ioc.get("indicator", "")):
+                for i, ioc in enumerate(iocs_list):
+                    ioc_indicator = ioc.indicator
+                    logger.info(f"Checking IoC {i}: '{ioc_indicator}' against step name '{step.name}'")
+                    logger.info(f"Step name ends with '{ioc_indicator}': {step.name.endswith(ioc_indicator)}")
+                    
+                    if step.name.endswith(ioc_indicator):
                         indicator_data = ioc
-                        logger.info(f"Found matching IoC for step '{step.name}': {ioc.get('indicator')}")
+                        logger.info(f"✓ Found matching IoC for step '{step.name}': {ioc_indicator}")
                         break
                 
                 if not indicator_data:
-                    logger.warning(f"No matching IoC found for step '{step.name}' in implementation plan. Available indicators: {[ioc.get('indicator', 'NO_INDICATOR') for ioc in iocs_list]}")
+                    logger.error(f"❌ No matching IoC found for step '{step.name}' in implementation plan.")
+                    logger.error(f"Available indicators: {[ioc.indicator for ioc in iocs_list]}")
+                    logger.error(f"Step name: '{step.name}'")
                     continue
                 
                 # We have valid indicator_data, proceed with task creation
                 task_parameters = {
-                    "indicator": indicator_data["indicator"],
-                    "type": indicator_data["type"],
-                    "search_description": indicator_data["search_description"],
-                    "priority": indicator_data["priority"],
+                    "indicator": indicator_data.indicator,
+                    "type": indicator_data.type,
+                    "search_description": indicator_data.search_description,
+                    "priority": indicator_data.priority,
                     "analysis_id": analysis_id,
                     "step_id": step.step_id
                 }
+                
+                logger.info(f"✓ Created task parameters for step '{step.name}': {task_parameters}")
                 
                 # Submit to all nodes
                 job_mappings = await self.edge_service.distribute_task_to_all_nodes(
@@ -239,10 +239,9 @@ class OrchestrationService:
                 step.job_ids = job_mappings
                 step.status = "running"
         
-        # Update database
-        analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-        analysis.workflow_steps = [step.dict() for step in workflow_steps]
-        self.db.commit()
+        # Update storage
+        workflow_steps_dict = [step.dict() for step in workflow_steps]
+        self.storage.update_analysis(analysis_id, workflow_steps=workflow_steps_dict)
     
     async def _monitor_execution(self, analysis_id: str):
         """Monitor execution of all workflow steps"""
@@ -250,8 +249,8 @@ class OrchestrationService:
         iteration = 0
         
         while iteration < max_iterations:
-            analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-            workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
+            analysis = self.storage.get_analysis(analysis_id)
+            workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps or []]
             
             all_completed = True
             any_progress = False
@@ -290,9 +289,9 @@ class OrchestrationService:
                 elif step.status in ["pending", "running"]:
                     all_completed = False
             
-            # Update database with progress
-            analysis.workflow_steps = [step.dict() for step in workflow_steps]
-            self.db.commit()
+            # Update storage with progress
+            workflow_steps_dict = [step.dict() for step in workflow_steps]
+            self.storage.update_analysis(analysis_id, workflow_steps=workflow_steps_dict)
             
             if all_completed:
                 break
@@ -306,10 +305,17 @@ class OrchestrationService:
     
     async def _correlate_results(self, analysis_id: str):
         """Correlate results from all edge nodes"""
-        analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-        workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
+        analysis = self.storage.get_analysis(analysis_id)
+        workflow_steps = [WorkflowStep(**step) for step in analysis.workflow_steps or []]
         
         node_results = {}
+        correlation_step = None
+        
+        # Find the correlation step
+        for step in workflow_steps:
+            if step.task_type == "evidence_correlation":
+                correlation_step = step
+                break
         
         # Collect results from all completed jobs
         for step in workflow_steps:
@@ -319,60 +325,347 @@ class OrchestrationService:
                     if result:
                         if node_id not in node_results:
                             node_results[node_id] = []
-                        node_results[node_id].append({
+                        
+                        step_result_data = {
                             "step_id": step.step_id,
                             "step_name": step.name,
                             "result": result
-                        })
+                        }
+                        node_results[node_id].append(step_result_data)
+                        
+                        # Also populate the step.result field to link the data properly
+                        if not step.result:
+                            step.result = {}
+                        if node_id not in step.result:
+                            step.result[node_id] = []
+                        step.result[node_id].append(result)
         
-        # Store aggregated results
-        analysis.node_results = node_results
-        self.db.commit()
+        # Mark correlation step as completed
+        if correlation_step:
+            correlation_step.status = "completed"
+            correlation_step.progress = 100
+            logger.info(f"Evidence correlation completed for analysis {analysis_id}")
+        
+        # Update workflow steps with linked results
+        workflow_steps_dict = [step.dict() for step in workflow_steps]
+        
+        # Store aggregated results and updated workflow steps
+        self.storage.update_analysis(
+            analysis_id, 
+            node_results=node_results,
+            workflow_steps=workflow_steps_dict
+        )
         logger.info(f"Correlated results from {len(node_results)} nodes for analysis {analysis_id}")
     
     async def _update_analysis_status(self, analysis_id: str, status: AnalysisStatus):
-        """Update analysis status in database"""
-        analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-        if analysis:
-            analysis.status = status
-            self.db.commit()
+        """Update analysis status in storage"""
+        success = self.storage.update_analysis(analysis_id, status=status)
+        if success:
             logger.info(f"Updated analysis {analysis_id} status to {status}")
+        else:
+            logger.error(f"Failed to update analysis {analysis_id} status to {status}")
     
     async def _fail_analysis(self, analysis_id: str, error_message: str):
         """Mark analysis as failed"""
-        analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
-        if analysis:
-            analysis.status = AnalysisStatus.FAILED
-            analysis.error_message = error_message
-            analysis.completed_at = datetime.utcnow()
-            self.db.commit()
+        success = self.storage.update_analysis(
+            analysis_id,
+            status=AnalysisStatus.FAILED,
+            error_message=error_message,
+            completed_at=datetime.utcnow()
+        )
+        if success:
             logger.error(f"Failed analysis {analysis_id}: {error_message}")
+        else:
+            logger.error(f"Failed to update failed analysis {analysis_id}: {error_message}")
     
-    def get_analysis_status(self, analysis_id: str) -> Optional[Dict[str, Any]]:
-        """Get current status of an analysis"""
-        analysis = self.db.query(ThreatAnalysisDB).filter(ThreatAnalysisDB.id == analysis_id).first()
+    @staticmethod
+    def get_analysis_status_static(storage: SimpleStorage, analysis_id: str) -> Optional[Dict[str, Any]]:
+        """Get current status of an analysis (static method for fast status checks)"""
+        analysis = storage.get_analysis(analysis_id)
         if not analysis:
             return None
         
         # Calculate overall progress
         overall_progress = 0
         if analysis.workflow_steps:
-            steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
-            if steps:
-                overall_progress = sum(step.progress for step in steps) // len(steps)
+            try:
+                steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
+                if steps:
+                    # If analysis status is completed, progress should be 100%
+                    analysis_status = analysis.status.value if isinstance(analysis.status, AnalysisStatus) else analysis.status
+                    if analysis_status == "completed":
+                        overall_progress = 100
+                    else:
+                        # Count completed steps for better accuracy
+                        completed_steps = sum(1 for step in steps if step.status == "completed")
+                        overall_progress = (completed_steps * 100) // len(steps)
+            except Exception:
+                # If workflow steps are malformed, just use 0 progress
+                overall_progress = 0
         
         return {
             "analysis_id": analysis.id,
-            "status": analysis.status,
+            "status": analysis.status.value if isinstance(analysis.status, AnalysisStatus) else analysis.status,
             "progress": overall_progress,
             "steps": analysis.workflow_steps or [],
             "implementation_plan": analysis.implementation_plan,
             "node_results": analysis.node_results or {},
-            "created_at": analysis.created_at,
+            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
             "error_message": analysis.error_message
         }
     
+    @staticmethod
+    def get_structured_analysis_status(storage: SimpleStorage, analysis_id: str) -> Optional[Dict[str, Any]]:
+        """Get analysis status with improved structure for better usability"""
+        analysis = storage.get_analysis(analysis_id)
+        if not analysis:
+            return None
+        
+        # Calculate overall progress
+        overall_progress = 0
+        completed_steps = 0
+        total_steps = 0
+        
+        steps_summary = []
+        if analysis.workflow_steps:
+            try:
+                steps = [WorkflowStep(**step) for step in analysis.workflow_steps]
+                total_steps = len(steps)
+                
+                for step in steps:
+                    if step.status == "completed":
+                        completed_steps += 1
+                    
+                    steps_summary.append({
+                        "step_id": step.step_id,
+                        "name": step.name,
+                        "task_type": step.task_type,
+                        "status": step.status,
+                        "progress": step.progress,
+                        "assigned_nodes": step.assigned_nodes
+                    })
+                
+                if total_steps > 0:
+                    overall_progress = (completed_steps * 100) // total_steps
+                    
+            except Exception:
+                overall_progress = 0
+        
+        # Aggregate evidence across all nodes (using both node_results and step.result for completeness)
+        all_evidence = []
+        threat_indicators = {}
+        affected_nodes = set()
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        
+        # Primary evidence aggregation from node_results
+        node_results = analysis.node_results or {}
+        for node_id, node_data in node_results.items():
+            if isinstance(node_data, list):
+                for step_result in node_data:
+                    step_evidence = step_result.get("result", {}).get("evidence", [])
+                    for evidence in step_evidence:
+                        # Enrich evidence with step context
+                        enriched_evidence = {
+                            **evidence,
+                            "step_name": step_result.get("step_name", "Unknown"),
+                            "node_hostname": step_result.get("result", {}).get("hostname", node_id)
+                        }
+                        all_evidence.append(enriched_evidence)
+                        
+                        # Track threat indicators
+                        indicator = evidence.get("indicator", "Unknown")
+                        if indicator not in threat_indicators:
+                            threat_indicators[indicator] = {
+                                "total_occurrences": 0,
+                                "affected_nodes": set(),
+                                "highest_severity": "low",
+                                "evidence_types": set()
+                            }
+                        
+                        threat_indicators[indicator]["total_occurrences"] += 1
+                        threat_indicators[indicator]["affected_nodes"].add(node_id)
+                        threat_indicators[indicator]["evidence_types"].add(evidence.get("type", "unknown"))
+                        
+                        # Update highest severity
+                        severity = evidence.get("severity", "low")
+                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+                        affected_nodes.add(node_id)
+                        
+                        current_severity = threat_indicators[indicator]["highest_severity"]
+                        severity_levels = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+                        if severity_levels.get(severity, 1) > severity_levels.get(current_severity, 1):
+                            threat_indicators[indicator]["highest_severity"] = severity
+        
+        # Convert sets to lists for JSON serialization
+        for indicator_data in threat_indicators.values():
+            indicator_data["affected_nodes"] = list(indicator_data["affected_nodes"])
+            indicator_data["evidence_types"] = list(indicator_data["evidence_types"])
+        
+        # Generate executive summary
+        total_evidence = len(all_evidence)
+        threat_detected = total_evidence > 0
+        risk_level = "low"
+        
+        if severity_counts["critical"] > 0:
+            risk_level = "critical"
+        elif severity_counts["high"] > 0:
+            risk_level = "high"
+        elif severity_counts["medium"] > 0:
+            risk_level = "medium"
+        
+        # Generate recommendations based on findings
+        recommendations = []
+        if threat_detected:
+            if risk_level in ["critical", "high"]:
+                recommendations.extend([
+                    "Immediately isolate affected systems from network",
+                    "Initiate incident response procedures",
+                    "Collect forensic artifacts from affected nodes",
+                    "Monitor for lateral movement indicators"
+                ])
+            else:
+                recommendations.extend([
+                    "Continue monitoring for additional indicators",
+                    "Review and update detection signatures",
+                    "Conduct deeper analysis on identified artifacts"
+                ])
+        else:
+            recommendations.extend([
+                "Continue routine monitoring",
+                "Update threat intelligence feeds",
+                "Schedule periodic threat hunting activities"
+            ])
+        
+        return {
+            "analysis_id": analysis.id,
+            "status": analysis.status.value if isinstance(analysis.status, AnalysisStatus) else analysis.status,
+            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
+            "error_message": analysis.error_message,
+            
+            # Executive Summary
+            "summary": {
+                "overall_progress": overall_progress,
+                "completed_steps": completed_steps,
+                "total_steps": total_steps,
+                "threat_detected": threat_detected,
+                "risk_level": risk_level,
+                "total_evidence": total_evidence,
+                "affected_nodes_count": len(affected_nodes),
+                "unique_indicators": len(threat_indicators)
+            },
+            
+            # Evidence Analysis
+            "evidence": {
+                "total_count": total_evidence,
+                "by_severity": severity_counts,
+                "by_node": {node_id: len([e for e in all_evidence if e.get("node_id") == node_id]) 
+                           for node_id in affected_nodes},
+                "findings": sorted(all_evidence, 
+                                 key=lambda x: {"critical": 4, "high": 3, "medium": 2, "low": 1}
+                                 .get(x.get("severity", "low"), 1), reverse=True)
+            },
+            
+            # Threat Intelligence
+            "threat_indicators": {
+                indicator: {
+                    **data,
+                    "risk_score": len(data["affected_nodes"]) * 
+                                {"critical": 4, "high": 3, "medium": 2, "low": 1}
+                                .get(data["highest_severity"], 1)
+                }
+                for indicator, data in threat_indicators.items()
+            },
+            
+            # Step Progress (now with linked results in step.result field)
+            "workflow": {
+                "steps": steps_summary,
+                "implementation_plan": analysis.implementation_plan
+            },
+            
+            # Actionable Intelligence
+            "recommendations": recommendations,
+            "affected_nodes": list(affected_nodes),
+            
+            # Raw data (for detailed analysis if needed)
+            "raw_data": {
+                "steps": analysis.workflow_steps or [],
+                "node_results": analysis.node_results or {}
+            }
+        }
+    
+    def get_analysis_status(self, analysis_id: str) -> Optional[Dict[str, Any]]:
+        """Get current status of an analysis (instance method)"""
+        return self.get_analysis_status_static(self.storage, analysis_id)
+    
+    @classmethod
+    def _setup_cleanup_task(cls):
+        """Setup periodic cleanup of completed analyses (class-level singleton)"""
+        if not cls._cleanup_task or cls._cleanup_task.done():
+            try:
+                cls._cleanup_task = asyncio.create_task(cls._periodic_cleanup_static())
+            except RuntimeError:
+                # No event loop running, skip cleanup task setup
+                pass
+    
+    @classmethod
+    async def _periodic_cleanup_static(cls):
+        """Periodically clean up completed analysis tasks (static version)"""
+        while True:
+            try:
+                # For now, this is a placeholder - cleanup will be handled per instance
+                # TODO: Implement shared cleanup if needed
+                await asyncio.sleep(300)  # Check every 5 minutes
+                
+            except Exception as e:
+                logger.error(f"Error in static cleanup task: {str(e)}")
+                await asyncio.sleep(300)
+    
+    def get_active_analyses_count(self) -> int:
+        """Get count of currently active analyses"""
+        return len(self.active_analyses)
+    
+    def get_active_analyses_info(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about active analyses"""
+        info = {}
+        for analysis_id, task in self.active_analyses.items():
+            info[analysis_id] = {
+                "done": task.done(),
+                "cancelled": task.cancelled()
+            }
+        return info
+    
+    async def cancel_analysis(self, analysis_id: str) -> bool:
+        """Cancel a running analysis"""
+        if analysis_id in self.active_analyses:
+            task = self.active_analyses[analysis_id]
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                logger.info(f"Cancelled analysis: {analysis_id}")
+                return True
+        return False
+    
     async def cleanup(self):
         """Clean up resources"""
-        await self.blog_service.close()
+        # Cancel cleanup task
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel all active analyses
+        for analysis_id, task in list(self.active_analyses.items()):
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        self.active_analyses.clear()
         await self.edge_service.close()

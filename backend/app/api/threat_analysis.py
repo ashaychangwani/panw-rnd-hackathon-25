@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
 from typing import Dict, Any
 import asyncio
 import json
 import logging
 from datetime import datetime
 
-from app.core.database import get_database
+from app.core.database import get_storage, SimpleStorage
 from app.models.threat_analysis import ThreatAnalysisRequest, ThreatAnalysisResponse, ThreatAnalysisStatus
 from app.services.orchestration_service import OrchestrationService
 
@@ -26,13 +25,13 @@ class DateTimeEncoder(json.JSONEncoder):
 @router.post("/start", response_model=ThreatAnalysisResponse)
 async def start_threat_analysis(
     request: ThreatAnalysisRequest,
-    db: Session = Depends(get_database)
+    storage: SimpleStorage = Depends(get_storage)
 ):
     """
     Start a new threat analysis for the given blog URL.
     """
     try:
-        orchestration_service = OrchestrationService(db)
+        orchestration_service = OrchestrationService(storage, enable_cleanup=True)
         analysis_id = await orchestration_service.start_threat_analysis(request.blog_url)
         
         return ThreatAnalysisResponse(
@@ -47,14 +46,14 @@ async def start_threat_analysis(
 @router.get("/{analysis_id}/status")
 async def get_analysis_status(
     analysis_id: str,
-    db: Session = Depends(get_database)
+    storage: SimpleStorage = Depends(get_storage)
 ):
     """
-    Get the current status of a threat analysis.
+    Get the current status of a threat analysis (legacy format).
     """
     try:
-        orchestration_service = OrchestrationService(db)
-        status = orchestration_service.get_analysis_status(analysis_id)
+        # Use static method for fast status checking without creating full service instance
+        status = OrchestrationService.get_analysis_status_static(storage, analysis_id)
         
         if not status:
             raise HTTPException(status_code=404, detail="Analysis not found")
@@ -66,17 +65,79 @@ async def get_analysis_status(
         logger.error(f"Error getting analysis status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/{analysis_id}/status/structured")
+async def get_structured_analysis_status(
+    analysis_id: str,
+    storage: SimpleStorage = Depends(get_storage)
+):
+    """
+    Get the current status of a threat analysis with improved structure.
+    """
+    try:
+        # Use new structured method for better organized response
+        status = OrchestrationService.get_structured_analysis_status(storage, analysis_id)
+        
+        if not status:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting structured analysis status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/active")
+async def get_active_analyses(storage: SimpleStorage = Depends(get_storage)):
+    """
+    Get information about currently active analyses.
+    """
+    try:
+        orchestration_service = OrchestrationService(storage, enable_cleanup=False)
+        active_count = orchestration_service.get_active_analyses_count()
+        active_info = orchestration_service.get_active_analyses_info()
+        
+        return {
+            "active_count": active_count,
+            "analyses": active_info
+        }
+    except Exception as e:
+        logger.error(f"Error getting active analyses: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/{analysis_id}")
+async def cancel_analysis(
+    analysis_id: str,
+    storage: SimpleStorage = Depends(get_storage)
+):
+    """
+    Cancel a running analysis.
+    """
+    try:
+        orchestration_service = OrchestrationService(storage, enable_cleanup=False)
+        cancelled = await orchestration_service.cancel_analysis(analysis_id)
+        
+        if cancelled:
+            return {"message": f"Analysis {analysis_id} cancelled successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Analysis not found or already completed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/{analysis_id}/results")
 async def get_analysis_results(
     analysis_id: str,
-    db: Session = Depends(get_database)
+    storage: SimpleStorage = Depends(get_storage)
 ):
     """
-    Get the complete results of a threat analysis.
+    Get the complete results of a threat analysis with structured format.
     """
     try:
-        orchestration_service = OrchestrationService(db)
-        status = orchestration_service.get_analysis_status(analysis_id)
+        # Use new structured method for better organized response
+        status = OrchestrationService.get_structured_analysis_status(storage, analysis_id)
         
         if not status:
             raise HTTPException(status_code=404, detail="Analysis not found")
@@ -84,15 +145,7 @@ async def get_analysis_results(
         if status["status"] not in ["completed", "failed"]:
             raise HTTPException(status_code=400, detail="Analysis not yet completed")
         
-        return {
-            "analysis_id": analysis_id,
-            "status": status["status"],
-            "implementation_plan": status["implementation_plan"],
-            "workflow_steps": status["steps"],
-            "node_results": status["node_results"],
-            "created_at": status["created_at"],
-            "error_message": status.get("error_message")
-        }
+        return status
     except HTTPException:
         raise
     except Exception as e:
@@ -109,8 +162,8 @@ async def websocket_analysis_stream(websocket: WebSocket, analysis_id: str):
     
     try:
         # Send initial status
-        db = next(get_database())
-        orchestration_service = OrchestrationService(db)
+        storage = get_storage()
+        orchestration_service = OrchestrationService(storage)
         
         while True:
             try:

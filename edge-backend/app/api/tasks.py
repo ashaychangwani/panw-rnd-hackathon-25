@@ -118,3 +118,17 @@ async def list_active_jobs():
     except Exception as e:
         logger.error(f"Error listing jobs: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/node/info")
+async def get_node_info():
+    """
+    Get detailed node information including job statistics.
+    """
+    try:
+        if not job_manager:
+            raise HTTPException(status_code=500, detail="Job manager not initialized")
+        
+        return job_manager.get_node_info()
+    except Exception as e:
+        logger.error(f"Error getting node info: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

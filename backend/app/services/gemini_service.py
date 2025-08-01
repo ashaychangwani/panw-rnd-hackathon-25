@@ -21,9 +21,9 @@ class GeminiService:
             location=settings.google_cloud_location
         )
     
-    def analyze_threat_blog(self, blog_content: str) -> ImplementationPlan:
+    async def analyze_threat_blog(self, blog_url: str) -> ImplementationPlan:
         """
-        Analyze blog content and extract structured threat intelligence.
+        Analyze blog URL and extract structured threat intelligence.
         Uses function calling to ensure structured output.
         """
         
@@ -33,7 +33,7 @@ class GeminiService:
             "properties": {
                 "hypothesis": {
                     "type": "STRING",
-                    "description": "A detailed hypothesis about the threat based on the blog content"
+                    "description": "A concise, actionable hypothesis for a threat hunt based on the blog content"
                 },
                 "iocs_and_ttps": {
                     "type": "ARRAY",
@@ -51,7 +51,7 @@ class GeminiService:
                             },
                             "search_description": {
                                 "type": "STRING",
-                                "description": "Detailed description of how to search for this indicator"
+                                "description": "Brief description of what to search for"
                             },
                             "priority": {
                                 "type": "STRING",
@@ -69,44 +69,53 @@ class GeminiService:
         # Define the function for structured extraction using new SDK
         extract_threat_intel = {
             "name": "extract_threat_intelligence",
-            "description": "Extract structured threat intelligence from security blog content",
+            "description": "Extract structured threat intelligence from security blog URL",
             "parameters": threat_analysis_schema
         }
         
         # Create the tool using new SDK
         threat_tool = types.Tool(function_declarations=[extract_threat_intel])
         
-        # Craft the prompt
+        # Craft the prompt based on ioc_extraction.py
         prompt = f"""
-        You are a cybersecurity threat intelligence analyst. Analyze the following security blog content and extract:
+        As a Senior Threat Intelligence Analyst, your task is to analyze the following threat report URL and produce a structured threat hunting plan.
+        Based on the content at the URL, generate a concise, actionable hypothesis for a threat hunt.
+        Then, extract the most critical and searchable Indicators of Compromise (IOCs) and Tactics, Techniques, and Procedures (TTPs).
 
-        1. A detailed hypothesis about the threat described
-        2. Specific Indicators of Compromise (IOCs) and Tactics, Techniques, and Procedures (TTPs)
+        Your final output MUST be a single, valid JSON object with two keys: "hypothesis" and "iocs_and_ttps".
+        The "iocs_and_ttps" value must be a list where each item is a dictionary with "indicator", "type", "search_description", and "priority" keys.
+        Rank these iocs_and_ttps indicators by likelihood of being primary signals for this threat. Consider uniqueness and relevance to the described attack.
 
-        For each indicator/TTP, provide:
-        - The specific indicator name
-        - Whether it's an IOC or TTP
-        - Detailed search instructions for threat hunters
-        - Priority level (high/medium/low)
+        Example Output Format:
+        {{
+          "hypothesis": "The environment may be compromised by...",
+          "iocs_and_ttps": [{{"indicator": "....", "type": "TTP", 
+          "search_description": "Look for a ....","priority": "high"}}]
+        }}
 
-        Focus on actionable intelligence that can be used to hunt for this threat across enterprise environments.
+        Threat Report URL:
+        ---
+        {blog_url}
+        ---
 
-        Blog Content:
-        {blog_content[:8000]}  # Limit content to avoid token limits
-        
-        Extract the threat intelligence using the provided function.
+        Now, extract the threat intelligence using the provided function.
         """
         
         try:
             logger.info("Sending request to Gemini API for threat analysis")
             
-            # Generate response with function calling using new SDK
-            response = self.client.models.generate_content(
-                model='gemini-2.5-pro',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[threat_tool],
-                    http_options=types.HttpOptions(extra_body={'tool_config': {'function_calling_config': {'mode': 'COMPOSITIONAL'}}}),
+            # Generate response with function calling using new SDK (async)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model='gemini-2.5-pro',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[threat_tool],
+                        http_options=types.HttpOptions(extra_body={'tool_config': {'function_calling_config': {'mode': 'COMPOSITIONAL'}}}),
+                    )
                 )
             )
             
@@ -115,15 +124,15 @@ class GeminiService:
             # Validate response structure
             if not response:
                 logger.error("Gemini API returned None response")
-                return self._get_fallback_plan(blog_content)
+                return self._get_fallback_plan(blog_url)
                 
             if not response.candidates:
                 logger.error("Gemini API response has no candidates")
-                return self._get_fallback_plan(blog_content)
+                return self._get_fallback_plan(blog_url)
                 
             if not response.candidates[0].content.parts:
                 logger.error("Gemini API response candidate has no content parts")
-                return self._get_fallback_plan(blog_content)
+                return self._get_fallback_plan(blog_url)
             
             # Extract the function call result
             logger.info(f"Processing {len(response.candidates[0].content.parts)} response parts")
@@ -176,7 +185,7 @@ class GeminiService:
                 return self._parse_text_response(response.text)
             else:
                 logger.error("Response has no text content for fallback parsing")
-                return self._get_fallback_plan(blog_content)
+                return self._get_fallback_plan(blog_url)
             
         except Exception as e:
             logger.error(f"Critical error in Gemini analysis: {str(e)}")
@@ -184,7 +193,7 @@ class GeminiService:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             # Return a basic fallback response
-            return self._get_fallback_plan(blog_content)
+            return self._get_fallback_plan(blog_url)
     
     def _parse_text_response(self, text_response: str) -> ImplementationPlan:
         """Fallback text parsing if function calling fails"""
@@ -204,10 +213,11 @@ class GeminiService:
                 )
         except Exception as e:
             logger.error(f"Failed to parse text response: {str(e)}")
+            logger.error(f"Text response: {text_response}")
         
-        return self._get_fallback_plan(text_response)
+        return self._get_fallback_plan("fallback")
     
-    def _get_fallback_plan(self, content: str) -> ImplementationPlan:
+    def _get_fallback_plan(self, source: str) -> ImplementationPlan:
         """Provide a basic fallback implementation plan"""
         return ImplementationPlan(
             hypothesis="Analysis of security blog content indicates potential threat activity requiring investigation across endpoint and network infrastructure.",
